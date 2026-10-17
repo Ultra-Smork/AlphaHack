@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+PyJWT
+email-validator
+psycopg[binary]
+psycopg-pool
+httpx
