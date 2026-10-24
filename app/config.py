@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import timedelta
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,12 +46,17 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: str = "development"
-    http_addr: str = ":8080"
+    http_addr: str = ":8000"
 
-    database_url: str = "postgres://postgres:postgres@localhost:5432/alphahack?sslmode=disable"
+    database_url: str = "sqlite:///./alphahack.db"
+    drop_on_start: bool = False
 
     jwt_secret: str = "dev-insecure-change-me"
     jwt_ttl: timedelta = timedelta(hours=24)
+
+    ml_mode: Literal["mock", "http"] = "mock"
+    ml_base_url: str = "http://localhost:8001"
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
     ai_mock: bool = True
     ai_base_url: str = "https://api.openai.com/v1"
@@ -67,7 +73,7 @@ class Config(BaseSettings):
         except ValueError as exc:
             raise ValueError(f"config: parse JWT_TTL: {exc}") from exc
 
-    @field_validator("ai_mock", mode="before")
+    @field_validator("ai_mock", "drop_on_start", mode="before")
     @classmethod
     def _parse_bool(cls, value: object) -> object:
         if isinstance(value, bool) or value is None:
@@ -78,6 +84,15 @@ class Config(BaseSettings):
     @classmethod
     def _trim_base_url(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("ml_base_url", mode="after")
+    @classmethod
+    def _trim_ml_base_url(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
     @property
     def database(self) -> Database:
@@ -102,7 +117,7 @@ class Config(BaseSettings):
 
     @property
     def addr(self) -> tuple[str, int]:
-        """Split HTTP_ADDR (":8080" or "host:port") into a uvicorn host/port."""
+        """Split HTTP_ADDR (":8000" or "host:port") into a uvicorn host/port."""
         host, _, port = self.http_addr.rpartition(":")
         return (host or "0.0.0.0", int(port))
 

@@ -1,136 +1,248 @@
 from __future__ import annotations
 
-import uuid
-from contextlib import contextmanager
-
 import pytest
-from fastapi import Depends
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.config import Config
-from app.middleware.auth import get_user_id
+from app.platform import db
 from app.platform.ai.mock import Mock
 from app.server import create_app
 
 
-class _FakeConn:
-    def execute(self, _sql: str) -> None:
-        return None
-
-
-class FakePool:
-    def __init__(self, up: bool = True) -> None:
-        self.up = up
-        self.closed = False
-
-    @contextmanager
-    def connection(self, timeout: float | None = None):
-        if not self.up:
-            raise RuntimeError("database down")
-        yield _FakeConn()
-
-    def close(self) -> None:
-        self.closed = True
-
-
-def make_app(pool: FakePool | None = None):
-    cfg = Config(app_env="test", jwt_secret="test-secret", jwt_ttl="1h")
-    app = create_app(cfg, pool or FakePool(), Mock())
-
-    @app.get("/secure")
-    def secure(user_id: str = Depends(get_user_id)) -> dict:
-        return {"data": {"user_id": user_id}}
-
-    @app.get("/boom")
-    def boom() -> dict:
-        raise RuntimeError("kaboom")
-
-    return app, cfg
-
-
 @pytest.fixture
 def client():
-    app, cfg = make_app()
-    with TestClient(app, raise_server_exceptions=False) as c:
-        yield c, cfg
+    cfg = Config(
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        jwt_secret="test-secret-key-at-least-32-bytes",
+    )
+    database = db.open_db(cfg)
+    db.auto_migrate(database.engine, drop_on_start=True)
+    app = create_app(cfg, database, Mock())
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        yield test_client
 
 
-def test_live_is_ok(client):
-    c, _ = client
-    r = c.get("/healthz")
-    assert r.status_code == 200
-    assert r.json() == {"data": {"status": "ok"}}
+def login(client: TestClient, email: str) -> str:
+    response = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert response.status_code == 200
+    return response.json()["data"]["access_token"]
 
 
-def test_ready_ok_when_db_up(client):
-    c, _ = client
-    r = c.get("/readyz")
-    assert r.status_code == 200
-    assert r.json() == {"data": {"status": "ok"}}
+def auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-def test_ready_503_when_db_down():
-    app, _ = make_app(FakePool(up=False))
-    with TestClient(app, raise_server_exceptions=False) as c:
-        r = c.get("/readyz")
-    assert r.status_code == 503
-    assert r.json() == {"error": {"code": "not_ready", "message": "database unavailable"}}
+def create_application(
+    client: TestClient,
+    token: str,
+    *,
+    amount: int = 900_000,
+    term_months: int = 12,
+    company_age_months: int = 30,
+) -> dict:
+    response = client.post(
+        "/api/applications",
+        headers=auth(token),
+        json={
+            "product_id": 1,
+            "data": {
+                "amount": amount,
+                "term_months": term_months,
+                "company_age_months": company_age_months,
+                "monthly_revenue": 500_000,
+            },
+        },
+    )
+    assert response.status_code == 200
+    return response.json()["data"]
 
 
-def test_request_id_echoed(client):
-    c, _ = client
-    r = c.get("/healthz", headers={"X-Request-ID": "abc-123"})
-    assert r.headers["X-Request-ID"] == "abc-123"
-
-    generated = c.get("/healthz").headers["X-Request-ID"]
-    assert generated
+def test_health_endpoints(client):
+    assert client.get("/health").json() == {"data": {"status": "ok"}}
+    assert client.get("/healthz").json() == {"data": {"status": "ok"}}
+    assert client.get("/readyz").json() == {"data": {"status": "ok"}}
 
 
-def test_login_returns_deterministic_user_id(client):
-    c, _ = client
-    r = c.post("/api/v1/auth/login", json={"email": "User@Example.com", "password": "pw"})
-    assert r.status_code == 200
-    body = r.json()["data"]
-    assert body["user_id"] == str(uuid.uuid5(uuid.NAMESPACE_OID, "user@example.com"))
-    assert body["token"]
+def test_legacy_schema_fails_fast(tmp_path):
+    cfg = Config(
+        app_env="test",
+        database_url=f"sqlite:///{tmp_path / 'legacy.db'}",
+        jwt_secret="test-secret-key-at-least-32-bytes",
+    )
+    database = db.open_db(cfg)
+    try:
+        with database.engine.begin() as conn:
+            conn.execute(
+                text("CREATE TABLE users (id INTEGER PRIMARY KEY, phone TEXT)")
+            )
+        with pytest.raises(RuntimeError, match="incompatible schema"):
+            db.auto_migrate(database.engine)
+    finally:
+        database.close()
 
 
-def test_login_rejects_bad_input(client):
-    c, _ = client
-    r = c.post("/api/v1/auth/login", json={"email": "not-an-email", "password": "pw"})
-    assert r.status_code == 400
-    assert r.json() == {"error": {"code": "bad_request", "message": "invalid request"}}
+def test_login_and_invalid_credentials(client):
+    token = login(client, "client@demo.ru")
+    assert token
 
-    r = c.post("/api/v1/auth/login", json={"email": "user@example.com", "password": ""})
-    assert r.status_code == 400
-
-
-def test_protected_requires_token(client):
-    c, _ = client
-    assert c.get("/secure").json()["error"]["code"] == "missing_token"
-
-    r = c.get("/secure", headers={"Authorization": "Bearer "})
-    assert r.status_code == 401
-    assert r.json()["error"]["code"] == "missing_token"
-
-    r = c.get("/secure", headers={"Authorization": "Bearer not-a-jwt"})
-    assert r.status_code == 401
-    assert r.json()["error"]["code"] == "invalid_token"
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "client@demo.ru", "password": "wrong"},
+    )
+    assert response.status_code == 401
+    assert response.json() == {
+        "error": {"code": "invalid_credentials", "message": "invalid email or password"}
+    }
 
 
-def test_protected_accepts_issued_token(client):
-    c, _ = client
-    login = c.post("/api/v1/auth/login", json={"email": "user@example.com", "password": "pw"})
-    token = login.json()["data"]["token"]
-    user_id = login.json()["data"]["user_id"]
-
-    r = c.get("/secure", headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 200
-    assert r.json() == {"data": {"user_id": user_id}}
+def test_protected_endpoint_requires_token(client):
+    response = client.get("/api/applications")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "missing_token"
 
 
-def test_unhandled_error_is_500_envelope(client):
-    c, _ = client
-    r = c.get("/boom")
-    assert r.status_code == 500
-    assert r.json() == {"error": {"code": "internal", "message": "internal error"}}
+def test_happy_path_to_offer_made_with_idempotent_submit(client):
+    token = login(client, "client@demo.ru")
+    application = create_application(client, token)
+    application_id = application["id"]
+    assert application["status"] == "DRAFT"
+    assert application["revision"]["version"] == 1
+
+    headers = {
+        **auth(token),
+        "Idempotency-Key": "submit-happy-1",
+    }
+    response = client.post(
+        f"/api/applications/{application_id}/submit",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    submitted = response.json()["data"]
+    assert submitted["status"] == "OFFER_MADE"
+    assert submitted["offer"]["amount"] == 900_000
+    assert submitted["offer"]["term"] == 12
+
+    retry = client.post(
+        f"/api/applications/{application_id}/submit",
+        headers=headers,
+    )
+    assert retry.status_code == 200
+    assert retry.json() == response.json()
+
+    detail = client.get(
+        f"/api/applications/{application_id}",
+        headers=auth(token),
+    ).json()["data"]
+    assert detail["status"] == "OFFER_MADE"
+    assert [event["to_status"] for event in detail["events"]][-1] == "OFFER_MADE"
+
+
+def test_patch_revision_conflict(client):
+    token = login(client, "client@demo.ru")
+    application = create_application(client, token)
+    application_id = application["id"]
+
+    updated = client.patch(
+        f"/api/applications/{application_id}",
+        headers=auth(token),
+        json={
+            "expected_revision": 1,
+            "data": {
+                "amount": 950_000,
+                "term_months": 18,
+                "company_age_months": 30,
+                "monthly_revenue": 500_000,
+            },
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["revision"]["version"] == 2
+
+    stale = client.patch(
+        f"/api/applications/{application_id}",
+        headers=auth(token),
+        json={
+            "expected_revision": 1,
+            "data": {
+                "amount": 950_000,
+                "term_months": 18,
+                "company_age_months": 30,
+                "monthly_revenue": 500_000,
+            },
+        },
+    )
+    assert stale.status_code == 409
+
+
+def test_manual_review_and_bank_queue(client):
+    client_token = login(client, "client@demo.ru")
+    bank_token = login(client, "bank@demo.ru")
+    application = create_application(
+        client,
+        client_token,
+        amount=1_500_000,
+        term_months=18,
+        company_age_months=30,
+    )
+
+    submitted = client.post(
+        f"/api/applications/{application['id']}/submit",
+        headers=auth(client_token),
+    )
+    assert submitted.status_code == 200
+    assert submitted.json()["data"]["status"] == "MANUAL_REVIEW"
+
+    forbidden = client.get("/api/bank/applications", headers=auth(client_token))
+    assert forbidden.status_code == 403
+
+    queue = client.get("/api/bank/applications", headers=auth(bank_token))
+    assert queue.status_code == 200
+    assert [item["id"] for item in queue.json()["data"]] == [application["id"]]
+
+    reviewed = client.post(
+        f"/api/bank/applications/{application['id']}/review",
+        headers=auth(bank_token),
+        json={"decision": "APPROVE", "reason": "ok"},
+    )
+    assert reviewed.status_code == 200
+    assert reviewed.json()["data"]["status"] == "OFFER_MADE"
+    assert reviewed.json()["data"]["offer"]["rate"] == 20.0
+
+
+def test_sign_requires_idempotency_key(client):
+    token = login(client, "client@demo.ru")
+    application = create_application(client, token)
+    application_id = application["id"]
+
+    submitted = client.post(
+        f"/api/applications/{application_id}/submit",
+        headers=auth(token),
+    ).json()["data"]
+    offer_id = submitted["offer"]["id"]
+
+    accepted = client.post(
+        f"/api/applications/{application_id}/offers/{offer_id}/accept",
+        headers=auth(token),
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["status"] == "OFFER_ACCEPTED"
+
+    missing = client.post(
+        f"/api/applications/{application_id}/sign",
+        headers=auth(token),
+    )
+    assert missing.status_code == 400
+
+    signed = client.post(
+        f"/api/applications/{application_id}/sign",
+        headers={**auth(token), "Idempotency-Key": "sign-1"},
+    )
+    assert signed.status_code == 200
+    assert signed.json()["data"]["status"] == "DISBURSED"
+    assert signed.json()["data"]["contract"]["status"] == "signed"
+    assert signed.json()["data"]["disbursement"]["status"] == "success"

@@ -18,10 +18,10 @@ def run() -> None:
     cfg = load()
     configure(cfg.app_env)
 
-    pool = db.open_db(cfg)
-    db.auto_migrate(pool)
+    database = db.open_db(cfg)
+    db.auto_migrate(database.engine, cfg.drop_on_start)
 
-    app = create_app(cfg, pool, ai.new(cfg))
+    app = create_app(cfg, database, ai.new(cfg))
     host, port = cfg.addr
     log.info("server starting", extra={"addr": cfg.http_addr, "env": cfg.app_env})
 

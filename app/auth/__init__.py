@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -20,12 +23,13 @@ class TokenManager:
         self._secret = secret
         self._ttl = ttl
 
-    def issue(self, user_id: str) -> str:
+    def issue(self, user_id: str, role: str = "client") -> str:
         """Return a signed token for the user."""
         now = datetime.now(timezone.utc)
         claims = {
             "sub": user_id,
             "uid": user_id,
+            "role": role,
             "iat": now,
             "exp": now + self._ttl,
         }
@@ -45,3 +49,18 @@ class TokenManager:
         if not user_id:
             raise ValueError("auth: token missing user id")
         return str(user_id)
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return f"{salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, expected = stored.split("$", 1)
+    except ValueError:
+        return False
+    digest = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return hmac.compare_digest(digest, expected)
