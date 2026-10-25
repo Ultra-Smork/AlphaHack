@@ -90,24 +90,28 @@ export function ApplicationCreatePage() {
 
     if (
       !Number.isFinite(parsedAmount) ||
+      !Number.isInteger(parsedAmount) ||
       parsedAmount < 1 ||
       parsedAmount > MAX_AMOUNT
     ) {
-      next.amount = 'Сумма должна быть от 1 до 1 000 000 000 ₽'
+      next.amount = 'Сумма должна быть целым числом от 1 до 1 000 000 000 ₽'
     }
     if (
       !Number.isFinite(parsedTerm) ||
+      !Number.isInteger(parsedTerm) ||
       parsedTerm < 1 ||
       parsedTerm > MAX_TERM_MONTHS
     ) {
-      next.term = 'Срок должен быть от 1 до 120 месяцев'
+      next.term = 'Срок должен быть целым числом от 1 до 120 месяцев'
     }
     if (
+      companyAgeMonths.trim() === '' ||
       !Number.isFinite(parsedAge) ||
+      !Number.isInteger(parsedAge) ||
       parsedAge < 0 ||
       parsedAge > MAX_COMPANY_AGE_MONTHS
     ) {
-      next.age = 'Возраст бизнеса должен быть от 0 до 1200 месяцев'
+      next.age = 'Возраст бизнеса должен быть целым числом от 0 до 1200 месяцев'
     }
     if (
       parsedRevenue !== null &&
@@ -240,7 +244,7 @@ export function ApplicationCreatePage() {
                   type="number"
                   min="1"
                   max={MAX_AMOUNT}
-                  step="1000"
+                  step="1"
                   placeholder="Например, 1 000 000"
                   value={amount}
                   aria-invalid={Boolean(fieldErrors.amount)}

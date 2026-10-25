@@ -246,6 +246,74 @@ def test_product_age_decline_reports_product_eligibility_stage():
         assert evaluation["reason_codes"][0]["code"] == "PRODUCT_BUSINESS_AGE_REQUIREMENT"
 
 
+def test_needs_info_can_be_completed_and_resubmitted():
+    cfg = Config(
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        jwt_secret="test-secret-key-at-least-32-bytes",
+        ml_mode="engine",
+    )
+    database = db.open_db(cfg)
+    db.auto_migrate(database.engine)
+    app = create_app(cfg, database)
+    with TestClient(app) as test_client:
+        token = login(test_client, "client@demo.ru")
+        created = test_client.post(
+            "/api/applications",
+            headers=auth(token),
+            json={
+                "product_id": 1,
+                "data": {
+                    "amount": 1_000_000,
+                    "term_months": 24,
+                    "company_age_months": 36,
+                    "credit_report_consent_valid": True,
+                },
+            },
+        )
+        assert created.status_code == 200
+        application_id = created.json()["data"]["id"]
+
+        first_submit = test_client.post(
+            f"/api/applications/{application_id}/submit",
+            headers={**auth(token), "Idempotency-Key": "needs-info-1"},
+        )
+        assert first_submit.status_code == 200
+        detail = first_submit.json()["data"]
+        assert detail["status"] == "NEEDS_INFO"
+        revision = detail["current_revision"]["version"]
+
+        patched = test_client.patch(
+            f"/api/applications/{application_id}",
+            headers=auth(token),
+            json={
+                "expected_revision": revision,
+                "data": {
+                    "amount": 1_000_000,
+                    "term_months": 24,
+                    "company_age_months": 36,
+                    "monthly_revenue": 1_500_000,
+                    "monthly_cash_available_for_debt_service_rub": 400_000,
+                    "existing_debt": 0,
+                    "revenue_cv_12m": 0.15,
+                    "largest_customer_share": 0.25,
+                    "credit_report_consent_valid": True,
+                },
+            },
+        )
+        assert patched.status_code == 200
+        assert patched.json()["data"]["status"] == "NEEDS_INFO"
+
+        second_submit = test_client.post(
+            f"/api/applications/{application_id}/submit",
+            headers={**auth(token), "Idempotency-Key": "needs-info-2"},
+        )
+        assert second_submit.status_code == 200
+        detail = second_submit.json()["data"]
+        assert detail["status"] == "OFFER_MADE"
+        assert detail["evaluations"][-1]["decision_stage"] == "OFFER"
+
+
 def test_submit_runs_through_credit_engine():
     cfg = Config(
         app_env="test",

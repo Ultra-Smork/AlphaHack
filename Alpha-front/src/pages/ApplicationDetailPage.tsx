@@ -528,16 +528,28 @@ export function ApplicationDetailPage() {
     const nextErrors: EditFieldErrors = {}
     if (
       !Number.isFinite(amount) ||
+      !Number.isInteger(amount) ||
       amount < 1 ||
       amount > 1_000_000_000
     ) {
-      nextErrors.amount = 'Сумма должна быть от 1 до 1 000 000 000 ₽'
+      nextErrors.amount = 'Сумма должна быть целым числом от 1 до 1 000 000 000 ₽'
     }
-    if (!Number.isFinite(term) || term < 1 || term > 120) {
-      nextErrors.term = 'Срок должен быть от 1 до 120 месяцев'
+    if (
+      !Number.isFinite(term) ||
+      !Number.isInteger(term) ||
+      term < 1 ||
+      term > 120
+    ) {
+      nextErrors.term = 'Срок должен быть целым числом от 1 до 120 месяцев'
     }
-    if (!Number.isFinite(age) || age < 0 || age > 1200) {
-      nextErrors.age = 'Возраст бизнеса должен быть от 0 до 1200 месяцев'
+    if (
+      editAge.trim() === '' ||
+      !Number.isFinite(age) ||
+      !Number.isInteger(age) ||
+      age < 0 ||
+      age > 1200
+    ) {
+      nextErrors.age = 'Возраст бизнеса должен быть целым числом от 0 до 1200 месяцев'
     }
     if (revenue !== null && (!Number.isFinite(revenue) || revenue < 0)) {
       nextErrors.revenue = 'Выручка не может быть отрицательной'
@@ -582,17 +594,42 @@ export function ApplicationDetailPage() {
 
     setEditLoading(true)
     setEditError(null)
+    setActionError(null)
+
     try {
       const response = await api.patch<ApplicationDetail>(
         `/api/applications/${applicationId}`,
         payload,
       )
       setApplication(response.data)
-      setEditOpen(false)
-      toast.success('Заявка обновлена')
     } catch (cause) {
       const message = getApiErrorMessage(cause, 'Не удалось обновить заявку')
       setEditError(message)
+      toast.error(message)
+      setEditLoading(false)
+      return
+    }
+
+    setEditOpen(false)
+    try {
+      const response = await apiMutation(
+        'POST',
+        `/api/applications/${applicationId}/submit`,
+      )
+      if (isApplicationDetail(response.data)) {
+        setApplication(response.data)
+      } else {
+        await fetchApplication(true)
+      }
+      toast.success(
+        'Данные сохранены. Заявка отправлена на повторную оценку.',
+      )
+    } catch (cause) {
+      const message = getApiErrorMessage(
+        cause,
+        'Данные сохранены, но не удалось отправить заявку на повторную оценку.',
+      )
+      setActionError(message)
       toast.error(message)
     } finally {
       setEditLoading(false)
@@ -824,6 +861,15 @@ export function ApplicationDetailPage() {
       ) : null}
 
       <ApplicationStepper status={application.status} />
+
+      {actionError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-medium text-red-800">
+            Не удалось выполнить действие
+          </p>
+          <p className="mt-1 text-sm text-red-700">{actionError}</p>
+        </div>
+      ) : null}
 
       {REFUSAL_STATUSES.has(application.status) ? (
         <div
@@ -1228,15 +1274,6 @@ export function ApplicationDetailPage() {
         ) : null}
       </div>
 
-      {actionError ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="text-sm font-medium text-red-800">
-            Не удалось выполнить действие
-          </p>
-          <p className="mt-1 text-sm text-red-700">{actionError}</p>
-        </div>
-      ) : null}
-
       <ConfirmDialog
         open={action !== null}
         onOpenChange={(open) => {
@@ -1261,7 +1298,7 @@ export function ApplicationDetailPage() {
         }}
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <form onSubmit={handleEditSubmit}>
+          <form onSubmit={handleEditSubmit} noValidate>
             <DialogHeader>
               <DialogTitle>Дополнить данные</DialogTitle>
               <DialogDescription>
@@ -1278,7 +1315,7 @@ export function ApplicationDetailPage() {
                     type="number"
                     min="1"
                     max="1000000000"
-                    step="1000"
+                    step="1"
                     placeholder="Например, 1 000 000"
                     value={editAmount}
                     aria-invalid={Boolean(editFieldErrors.amount)}
@@ -1563,7 +1600,7 @@ export function ApplicationDetailPage() {
               </Button>
               <Button type="submit" disabled={editLoading}>
                 {editLoading ? <Loader2 className="animate-spin" /> : null}
-                {editLoading ? 'Сохранение...' : 'Сохранить'}
+                {editLoading ? 'Сохранение...' : 'Сохранить и подать'}
               </Button>
             </DialogFooter>
           </form>
