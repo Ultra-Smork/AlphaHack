@@ -5,6 +5,4 @@ pydantic-settings
 sqlalchemy>=2.0
 PyJWT
 email-validator
-psycopg[binary]
-psycopg-pool
 httpx

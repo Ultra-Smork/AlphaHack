@@ -25,7 +25,7 @@ def new_auth_router(tokens: TokenManager) -> APIRouter:
                 401, "invalid_credentials", "invalid email or password"
             )
 
-        token = tokens.issue(str(user.id), user.role)
+        token = tokens.issue(str(user.id))
         return responses.ok(LoginResponse(access_token=token))
 
     return router

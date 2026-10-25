@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.config import Config
 from app.platform import db
-from app.platform.ai.mock import Mock
+from app.platform.ai.ml_client import CreditEngineClient
 from app.server import create_app
 
 
@@ -16,10 +18,11 @@ def client():
         app_env="test",
         database_url="sqlite:///:memory:",
         jwt_secret="test-secret-key-at-least-32-bytes",
+        ml_mode="mock",
     )
     database = db.open_db(cfg)
     db.auto_migrate(database.engine, drop_on_start=True)
-    app = create_app(cfg, database, Mock())
+    app = create_app(cfg, database)
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
 
@@ -55,6 +58,7 @@ def create_application(
                 "term_months": term_months,
                 "company_age_months": company_age_months,
                 "monthly_revenue": 500_000,
+                "credit_report_consent_valid": True,
             },
         },
     )
@@ -66,6 +70,119 @@ def test_health_endpoints(client):
     assert client.get("/health").json() == {"data": {"status": "ok"}}
     assert client.get("/healthz").json() == {"data": {"status": "ok"}}
     assert client.get("/readyz").json() == {"data": {"status": "ok"}}
+
+
+def test_cors_allows_idempotency_key(client):
+    response = client.options(
+        "/api/applications",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,idempotency-key",
+        },
+    )
+    assert response.status_code == 200
+    allowed = response.headers["access-control-allow-headers"].lower()
+    assert "idempotency-key" in allowed
+
+
+def test_application_amount_limit(client):
+    token = login(client, "client@demo.ru")
+    response = client.post(
+        "/api/applications",
+        headers=auth(token),
+        json={
+            "product_id": 1,
+            "data": {
+                "amount": 1_000_000_001,
+                "term_months": 12,
+                "company_age_months": 24,
+                "monthly_revenue": 100_000,
+            },
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_credit_engine_client_typical_request():
+    result = asyncio.run(
+        CreditEngineClient().evaluate(
+            {
+                "application_id": 1,
+                "revision_id": 1,
+                "revision_version": 1,
+                "product_id": 1,
+                "amount": 1_000_000,
+                "term_months": 24,
+                "company_age_months": 36,
+                "monthly_revenue": 1_500_000,
+                "monthly_cash_available_for_debt_service_rub": 400_000,
+                "existing_debt": 50_000,
+                "credit_report_consent_valid": True,
+            }
+        )
+    )
+    assert result["decision"] == "APPROVED"
+    assert result["risk_score"] == 100
+    assert result["risk_band"] == "LOW"
+    assert result["offer"]["amount"] == 1_000_000
+    assert result["offer"]["annual_rate"] == 0.24
+    assert result["offer"]["monthly_payment_rub"] == 52_871.10
+    assert result["offer"]["dscr"] == 3.888361
+    assert result["reasons"][0]["code"] == "DEMO_POLICY_PASSED"
+    assert result["reasons"][0]["text"]
+
+
+def test_credit_engine_product_limit_explanation():
+    result = asyncio.run(
+        CreditEngineClient().evaluate(
+            {
+                "application_id": 2,
+                "revision_id": 1,
+                "revision_version": 1,
+                "product_id": 2,
+                "amount": 1_000_000,
+                "term_months": 24,
+                "company_age_months": 18,
+                "monthly_revenue": 1_200_000,
+                "monthly_cash_available_for_debt_service_rub": 150_000,
+                "existing_debt": 30_000,
+                "credit_report_consent_valid": True,
+            }
+        )
+    )
+    assert result["decision"] == "DECLINED"
+    reason = result["reasons"][0]
+    assert reason["code"] == "PRODUCT_BUSINESS_AGE_REQUIREMENT"
+    assert reason["details"]["current"] == "18 мес."
+    assert "24 мес." in reason["details"]["limit"]
+    assert reason["details"]["action"]
+
+
+def test_submit_runs_through_credit_engine():
+    cfg = Config(
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        jwt_secret="test-secret-key-at-least-32-bytes",
+        ml_mode="engine",
+    )
+    database = db.open_db(cfg)
+    db.auto_migrate(database.engine)
+    app = create_app(cfg, database)
+    with TestClient(app) as test_client:
+        token = login(test_client, "client@demo.ru")
+        application = create_application(test_client, token)
+        submitted = test_client.post(
+            f"/api/applications/{application['id']}/submit",
+            headers=auth(token),
+        )
+        assert submitted.status_code == 200
+        detail = submitted.json()["data"]
+        assert detail["status"] == "OFFER_MADE"
+        assert detail["evaluations"][0]["risk_score"] == 100
+        assert detail["evaluations"][0]["risk_category"] == "LOW"
+        assert detail["evaluations"][0]["reason_codes"][0]["code"] == "DEMO_POLICY_PASSED"
+        assert detail["offers"][0]["dscr"] is not None
 
 
 def test_legacy_schema_fails_fast(tmp_path):
@@ -179,42 +296,36 @@ def test_patch_revision_conflict(client):
     assert stale.status_code == 409
 
 
-def test_manual_review_and_bank_queue(client):
-    client_token = login(client, "client@demo.ru")
-    bank_token = login(client, "bank@demo.ru")
+def test_young_business_requires_info(client):
+    token = login(client, "client@demo.ru")
     application = create_application(
         client,
-        client_token,
-        amount=1_500_000,
+        token,
+        amount=1_000_000,
         term_months=18,
-        company_age_months=30,
+        company_age_months=6,
     )
 
     submitted = client.post(
         f"/api/applications/{application['id']}/submit",
-        headers=auth(client_token),
+        headers=auth(token),
     )
     assert submitted.status_code == 200
-    assert submitted.json()["data"]["status"] == "MANUAL_REVIEW"
+    assert submitted.json()["data"]["status"] == "NEEDS_INFO"
 
-    forbidden = client.get("/api/bank/applications", headers=auth(client_token))
-    assert forbidden.status_code == 403
 
-    queue = client.get("/api/bank/applications", headers=auth(bank_token))
-    assert queue.status_code == 200
-    assert [item["id"] for item in queue.json()["data"]] == [application["id"]]
+def test_bank_endpoints_removed(client):
+    token = login(client, "client@demo.ru")
+    assert client.get("/api/bank/applications", headers=auth(token)).status_code == 404
 
-    reviewed = client.post(
-        f"/api/bank/applications/{application['id']}/review",
-        headers=auth(bank_token),
-        json={"decision": "APPROVE", "reason": "ok"},
+    bank_login = client.post(
+        "/api/auth/login",
+        json={"email": "bank@demo.ru", "password": "password123"},
     )
-    assert reviewed.status_code == 200
-    assert reviewed.json()["data"]["status"] == "OFFER_MADE"
-    assert reviewed.json()["data"]["offer"]["rate"] == 20.0
+    assert bank_login.status_code == 401
 
 
-def test_sign_requires_idempotency_key(client):
+def test_decline_offer(client):
     token = login(client, "client@demo.ru")
     application = create_application(client, token)
     application_id = application["id"]
@@ -225,24 +336,96 @@ def test_sign_requires_idempotency_key(client):
     ).json()["data"]
     offer_id = submitted["offer"]["id"]
 
-    accepted = client.post(
-        f"/api/applications/{application_id}/offers/{offer_id}/accept",
+    headers = {**auth(token), "Idempotency-Key": "decline-1"}
+    declined = client.post(
+        f"/api/applications/{application_id}/offers/{offer_id}/decline",
+        headers=headers,
+    )
+    assert declined.status_code == 200
+    assert declined.json()["data"]["status"] == "OFFER_DECLINED"
+    assert declined.json()["data"]["offer"]["status"] == "declined"
+
+    retry = client.post(
+        f"/api/applications/{application_id}/offers/{offer_id}/decline",
+        headers=headers,
+    )
+    assert retry.status_code == 200
+    assert retry.json() == declined.json()
+
+    sign = client.post(
+        f"/api/applications/{application_id}/sign",
         headers=auth(token),
     )
-    assert accepted.status_code == 200
+    assert sign.status_code == 404
+
+
+def test_needs_info_can_be_updated_and_resubmitted(client):
+    token = login(client, "client@demo.ru")
+    application = create_application(
+        client,
+        token,
+        amount=1_000_000,
+        term_months=18,
+        company_age_months=6,
+    )
+    application_id = application["id"]
+
+    first = client.post(
+        f"/api/applications/{application_id}/submit",
+        headers=auth(token),
+    )
+    assert first.json()["data"]["status"] == "NEEDS_INFO"
+
+    updated = client.patch(
+        f"/api/applications/{application_id}",
+        headers=auth(token),
+        json={
+            "expected_revision": 1,
+            "data": {
+                "amount": 1_000_000,
+                "term_months": 18,
+                "company_age_months": 30,
+                "monthly_revenue": 500_000,
+            },
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["status"] == "NEEDS_INFO"
+    assert updated.json()["data"]["revision"]["version"] == 2
+
+    second = client.post(
+        f"/api/applications/{application_id}/submit",
+        headers=auth(token),
+    )
+    assert second.status_code == 200
+    assert second.json()["data"]["status"] == "OFFER_MADE"
+
+
+def test_withdraw_after_accept_and_terminal_guard(client):
+    token = login(client, "client@demo.ru")
+    application = create_application(client, token)
+    application_id = application["id"]
+
+    offer = client.post(
+        f"/api/applications/{application_id}/submit",
+        headers=auth(token),
+    ).json()["data"]["offer"]
+
+    accepted = client.post(
+        f"/api/applications/{application_id}/offers/{offer['id']}/accept",
+        headers=auth(token),
+    )
     assert accepted.json()["data"]["status"] == "OFFER_ACCEPTED"
 
-    missing = client.post(
-        f"/api/applications/{application_id}/sign",
+    withdrawn = client.post(
+        f"/api/applications/{application_id}/withdraw",
         headers=auth(token),
     )
-    assert missing.status_code == 400
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["data"]["status"] == "WITHDRAWN"
 
-    signed = client.post(
-        f"/api/applications/{application_id}/sign",
-        headers={**auth(token), "Idempotency-Key": "sign-1"},
+    again = client.post(
+        f"/api/applications/{application_id}/withdraw",
+        headers=auth(token),
     )
-    assert signed.status_code == 200
-    assert signed.json()["data"]["status"] == "DISBURSED"
-    assert signed.json()["data"]["contract"]["status"] == "signed"
-    assert signed.json()["data"]["disbursement"]["status"] == "success"
+    assert again.status_code == 409

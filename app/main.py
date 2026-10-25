@@ -1,4 +1,4 @@
-"""Command api is the HTTP entrypoint for the credit-cabinet backend."""
+"""Command api is the HTTP entrypoint for the Суирники3 backend."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import uvicorn
 
 from .config import load
 from .logging import configure
-from .platform import ai, db
+from .platform import db
 from .server import create_app
 
 log = logging.getLogger("app.main")
@@ -21,7 +21,7 @@ def run() -> None:
     database = db.open_db(cfg)
     db.auto_migrate(database.engine, cfg.drop_on_start)
 
-    app = create_app(cfg, database, ai.new(cfg))
+    app = create_app(cfg, database)
     host, port = cfg.addr
     log.info("server starting", extra={"addr": cfg.http_addr, "env": cfg.app_env})
 

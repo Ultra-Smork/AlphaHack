@@ -9,7 +9,14 @@ from starlette.middleware.cors import CORSMiddleware
 
 from .requestid import HEADER_REQUEST_ID
 
-ALLOW_HEADERS = ["Origin", "Content-Length", "Content-Type", "Authorization", HEADER_REQUEST_ID]
+ALLOW_HEADERS = [
+    "Origin",
+    "Content-Length",
+    "Content-Type",
+    "Authorization",
+    "Idempotency-Key",
+    HEADER_REQUEST_ID,
+]
 ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 

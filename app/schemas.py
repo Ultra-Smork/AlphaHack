@@ -29,10 +29,14 @@ class LoginResponse(BaseModel):
 class QuestionnaireData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    amount: int = Field(gt=0)
-    term_months: int = Field(ge=6, le=36)
-    company_age_months: int = Field(ge=0)
+    amount: int = Field(gt=0, le=1_000_000_000)
+    term_months: int = Field(ge=1, le=120)
+    company_age_months: int = Field(ge=0, le=1200)
     monthly_revenue: float | None = Field(default=None, ge=0)
+    monthly_cash_available_for_debt_service_rub: float | None = None
+    revenue_cv_12m: float | None = Field(default=None, ge=0, le=10)
+    largest_customer_share: float | None = Field(default=None, ge=0, le=1)
+    credit_report_consent_valid: bool = False
     purpose: str | None = Field(default=None, max_length=500)
     has_collateral: bool = False
     existing_debt: float = Field(default=0, ge=0)
@@ -81,6 +85,7 @@ class ApplicationSummary(BaseModel):
     product_id: int
     status: ApplicationStatus
     current_revision_id: int | None
+    current_revision: RevisionOut | None = None
     amount: int | None = None
     term_months: int | None = None
     created_at: datetime
@@ -107,13 +112,38 @@ class OfferOut(BaseModel):
     term: int
     rate: float
     payment: float
+    dscr: float | None = None
     expires_at: datetime | None
     status: str
 
 
+class ReasonOut(BaseModel):
+    code: str
+    text: str
+    details: dict[str, str] | None = None
+
+
+class EvaluationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    decision: str
+    risk_score: float
+    risk_category: str | None
+    reason_codes: list[ReasonOut | str]
+    risk_details: dict[str, object] | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    next_action: str | None = None
+    engine_version: str
+    policy_version: str
+
+
 class ApplicationDetail(ApplicationOut):
     revision: RevisionOut | None = None
+    current_revision: RevisionOut | None = None
     offer: OfferOut | None = None
+    offers: list[OfferOut] = Field(default_factory=list)
+    evaluations: list[EvaluationOut] = Field(default_factory=list)
     events: list[EventOut] = Field(default_factory=list)
 
 
@@ -122,30 +152,9 @@ class AcceptOfferResponse(BaseModel):
     offer: OfferOut
 
 
-class ContractOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    application_id: int
-    offer_id: int
-    status: str
-    signed_at: datetime | None
-
-
-class DisbursementOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    application_id: int
-    status: str
-    amount: float
-    created_at: datetime
-
-
-class SignResponse(BaseModel):
+class DeclineOfferResponse(BaseModel):
     status: ApplicationStatus
-    contract: ContractOut
-    disbursement: DisbursementOut
+    offer: OfferOut
 
 
 class WithdrawResponse(BaseModel):
@@ -153,45 +162,19 @@ class WithdrawResponse(BaseModel):
     status: ApplicationStatus
 
 
-class BankQueueItem(BaseModel):
-    id: int
-    company_id: int
-    company_name: str
-    product_id: int
-    status: ApplicationStatus
-    amount: int | None
-    term_months: int | None
-    company_age_months: int | None
-    created_at: datetime
-
-
-class ReviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    decision: Literal["APPROVE", "REJECT", "NEED_INFO"]
-    reason: str | None = Field(default=None, max_length=1000)
-
-    @field_validator("decision", mode="before")
-    @classmethod
-    def _normalize_decision(cls, value: object) -> object:
-        return value.upper() if isinstance(value, str) else value
-
-
-class ReviewResponse(BaseModel):
-    application_id: int
-    status: ApplicationStatus
-    manual_review_id: int
-    offer: OfferOut | None = None
-
-
 class MLRequest(BaseModel):
     application_id: int
     revision_id: int
+    revision_version: int
     product_id: int
     amount: int
     term_months: int
     company_age_months: int
     monthly_revenue: float | None = None
+    monthly_cash_available_for_debt_service_rub: float | None = None
+    revenue_cv_12m: float | None = None
+    largest_customer_share: float | None = None
+    credit_report_consent_valid: bool = False
     purpose: str | None = None
     has_collateral: bool = False
     existing_debt: float = 0
@@ -203,12 +186,21 @@ class MLOffer(BaseModel):
     annual_rate: float
     monthly_payment_rub: float
     dscr: float
+    repayment_type: str = "ANNUITY"
+    fees_rub: float = 0
+    insurance_rub: float = 0
+    collateral_required: bool = False
 
 
 class MLEvaluation(BaseModel):
-    decision: Literal["APPROVED", "COUNTEROFFER", "NEED_INFO", "MANUAL_REVIEW", "DECLINED"]
-    risk: float = Field(ge=0, le=1)
+    decision: Literal["APPROVED", "COUNTEROFFER", "NEED_INFO", "DECLINED"]
+    risk_score: float = Field(ge=0, le=100)
+    risk_band: str | None = None
+    risk_details: dict[str, object] = Field(default_factory=dict)
     offer: MLOffer | None = None
     reason_codes: list[str] = Field(default_factory=list)
+    reasons: list[ReasonOut] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    next_action: str | None = None
     engine_version: str
     policy_version: str

@@ -1,5 +1,3 @@
-export type UserRole = 'client' | 'bank'
-
 export type ProductId = 1 | 2
 
 export type ApplicationStatus =
@@ -9,39 +7,28 @@ export type ApplicationStatus =
   | 'NEEDS_INFO'
   | 'ENRICHMENT'
   | 'SCORING'
-  | 'MANUAL_REVIEW'
   | 'OFFER_MADE'
   | 'OFFER_ACCEPTED'
-  | 'SIGNING'
-  | 'SIGNED'
-  | 'DISBURSING'
-  | 'DISBURSEMENT_FAILED'
   | 'REJECTED'
   | 'CANCELLED'
   | 'WITHDRAWN'
   | 'OFFER_DECLINED'
   | 'OFFER_EXPIRED'
-  | 'DISBURSED'
-
-export type ReviewDecision = 'APPROVE' | 'REJECT' | 'NEED_INFO'
 
 export interface User {
   id: number
   email: string
-  role: UserRole
 }
 
 export interface JwtPayload {
   sub?: string
   uid?: string
-  role?: UserRole
   exp?: number
   iat?: number
 }
 
 export interface LoginResponse {
   access_token: string
-  role?: UserRole
   user_id?: number
   email?: string
 }
@@ -62,6 +49,10 @@ export interface QuestionnaireData {
   term_months: number
   company_age_months: number
   monthly_revenue?: number | null
+  monthly_cash_available_for_debt_service_rub?: number | null
+  revenue_cv_12m?: number | null
+  largest_customer_share?: number | null
+  credit_report_consent_valid?: boolean
   purpose?: string | null
   has_collateral?: boolean
   existing_debt?: number
@@ -83,8 +74,42 @@ export interface Offer {
   term: number
   rate: number
   payment: number
+  dscr: number | null
   expires_at: string | null
   status: string
+}
+
+export interface ReasonCode {
+  code: string
+  text: string
+  details?: {
+    title?: string
+    current?: string
+    limit?: string
+    action?: string
+  } | null
+}
+
+export interface RiskFactor {
+  code: string
+  points: number
+}
+
+export interface Evaluation {
+  id: number
+  decision: string
+  risk_score: number
+  risk_category: string | null
+  reason_codes: Array<ReasonCode | string>
+  risk_details?: {
+    factors?: RiskFactor[]
+    calibrated_pd?: number | null
+    next_action?: string
+  } | null
+  missing_fields?: string[]
+  next_action?: string | null
+  engine_version: string
+  policy_version: string
 }
 
 export interface ApplicationEvent {
@@ -105,16 +130,18 @@ export interface Application {
   status: ApplicationStatus
   current_revision_id: number | null
   created_at: string
+  current_revision?: ApplicationRevision | null
+  offers?: Offer[]
+  evaluations?: Evaluation[]
+  events?: ApplicationEvent[]
 }
 
-export interface ApplicationSummary extends Application {
-  amount: number | null
-  term_months: number | null
-}
+export type ApplicationSummary = Application
 
 export interface ApplicationDetail extends Application {
-  revision: ApplicationRevision | null
-  offer: Offer | null
+  current_revision: ApplicationRevision | null
+  offers: Offer[]
+  evaluations: Evaluation[]
   events: ApplicationEvent[]
 }
 
@@ -126,60 +153,4 @@ export interface CreateApplicationInput {
 export interface UpdateApplicationInput {
   expected_revision: number
   data: QuestionnaireData
-}
-
-export interface AcceptOfferResponse {
-  status: ApplicationStatus
-  offer: Offer
-}
-
-export interface Contract {
-  id: number
-  application_id: number
-  offer_id: number
-  status: string
-  signed_at: string | null
-}
-
-export interface Disbursement {
-  id: number
-  application_id: number
-  status: string
-  amount: number
-  created_at: string
-}
-
-export interface SignResponse {
-  status: ApplicationStatus
-  contract: Contract
-  disbursement: Disbursement
-}
-
-export interface WithdrawResponse {
-  id: number
-  status: ApplicationStatus
-}
-
-export interface BankQueueItem {
-  id: number
-  company_id: number
-  company_name: string
-  product_id: ProductId
-  status: ApplicationStatus
-  amount: number | null
-  term_months: number | null
-  company_age_months: number | null
-  created_at: string
-}
-
-export interface ReviewInput {
-  decision: ReviewDecision
-  reason?: string | null
-}
-
-export interface ReviewResponse {
-  application_id: number
-  status: ApplicationStatus
-  manual_review_id: number
-  offer: Offer | null
 }

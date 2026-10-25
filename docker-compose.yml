@@ -8,10 +8,9 @@ services:
       DROP_ON_START: "false"
       JWT_SECRET: dev-insecure-change-me
       JWT_TTL: 24h
-      ML_MODE: mock
+      ML_MODE: engine
       ML_BASE_URL: http://localhost:8001
       CORS_ORIGINS: http://localhost:5173,http://localhost:3000
-      AI_MOCK: "true"
     ports:
       - "8000:8000"
     volumes:

@@ -14,16 +14,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/contexts/AuthContext'
+import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage } from '@/lib/api'
 
-const demoAccounts = [
-  { label: 'Клиент', email: 'client@demo.ru' },
-  { label: 'Банк', email: 'bank@demo.ru' },
-]
-
-function homeForRole(role: 'client' | 'bank') {
-  return role === 'bank' ? '/bank' : '/applications'
-}
+const demoEmail = 'client@demo.ru'
 
 export function LoginPage() {
   const { user, token, login } = useAuth()
@@ -34,7 +28,7 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false)
 
   if (token && user) {
-    return <Navigate to={homeForRole(user.role)} replace />
+    return <Navigate to="/applications" replace />
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -43,21 +37,21 @@ export function LoginPage() {
     setLoading(true)
 
     try {
-      const nextUser = await login(email, password)
-      navigate(homeForRole(nextUser.role), { replace: true })
+      await login(email, password)
+      navigate('/applications', { replace: true })
     } catch (cause) {
-      setError(
-        getApiErrorMessage(
-          cause,
-          cause instanceof Error ? cause.message : 'Не удалось войти',
-        ),
+      const message = getApiErrorMessage(
+        cause,
+        cause instanceof Error ? cause.message : 'Не удалось войти',
       )
+      setError(message)
+      toast.error(message)
     } finally {
       setLoading(false)
     }
   }
 
-  function fillDemo(demoEmail: string) {
+  function fillDemo() {
     setEmail(demoEmail)
     setPassword('password123')
     setError(null)
@@ -114,21 +108,17 @@ export function LoginPage() {
 
           <div className="mt-6 rounded-md bg-gray-50 p-4">
             <p className="text-sm text-gray-600">
-              Демо: client@demo.ru / password123 (клиент), bank@demo.ru /
-              password123 (банк)
+              Демо: client@demo.ru / password123
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {demoAccounts.map((account) => (
-                <Button
-                  key={account.email}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => fillDemo(account.email)}
-                >
-                  Заполнить: {account.label}
-                </Button>
-              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={fillDemo}
+              >
+                Заполнить демо
+              </Button>
             </div>
           </div>
         </CardContent>

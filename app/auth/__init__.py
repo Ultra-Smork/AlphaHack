@@ -23,13 +23,12 @@ class TokenManager:
         self._secret = secret
         self._ttl = ttl
 
-    def issue(self, user_id: str, role: str = "client") -> str:
+    def issue(self, user_id: str) -> str:
         """Return a signed token for the user."""
         now = datetime.now(timezone.utc)
         claims = {
             "sub": user_id,
             "uid": user_id,
-            "role": role,
             "iat": now,
             "exp": now + self._ttl,
         }

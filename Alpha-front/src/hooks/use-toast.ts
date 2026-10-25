@@ -6,7 +6,8 @@ import type {
 } from '@/components/ui/toast'
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1_000_000
+const TOAST_REMOVE_DELAY = 5_000
+const TOAST_DURATION = 4_000
 
 type ToasterToast = ToastProps & {
   id: string
@@ -131,6 +132,25 @@ function dispatch(action: Action) {
 type ToastInput = Omit<ToasterToast, 'id'>
 
 function toast({ ...props }: ToastInput) {
+  const duplicate =
+    typeof props.title === 'string'
+      ? memoryState.toasts.find(
+          (item) =>
+            item.open !== false &&
+            item.title === props.title &&
+            item.variant === props.variant,
+        )
+      : undefined
+
+  if (duplicate) {
+    return {
+      id: duplicate.id,
+      dismiss: () =>
+        dispatch({ type: actionTypes.DISMISS_TOAST, toastId: duplicate.id }),
+      update: () => undefined,
+    }
+  }
+
   const id = genId()
 
   const update = (next: ToasterToast) =>
@@ -148,6 +168,7 @@ function toast({ ...props }: ToastInput) {
       ...props,
       id,
       open: true,
+      duration: props.duration ?? TOAST_DURATION,
       onOpenChange: (open) => {
         if (!open) {
           dismiss()
@@ -183,4 +204,14 @@ function useToast() {
   }
 }
 
-export { toast, useToast }
+type ToastWithHelpers = typeof toast & {
+  success: (message: string) => ReturnType<typeof toast>
+  error: (message: string) => ReturnType<typeof toast>
+}
+
+const toastWithHelpers = toast as ToastWithHelpers
+toastWithHelpers.success = (message) => toast({ title: message })
+toastWithHelpers.error = (message) =>
+  toast({ title: message, variant: 'destructive' })
+
+export { toastWithHelpers as toast, useToast }

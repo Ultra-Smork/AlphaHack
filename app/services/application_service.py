@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -17,13 +18,9 @@ from ..models import (
     ApplicationRevision,
     ApplicationStatus,
     CheckResult,
-    Company,
     CompanyMembership,
-    Contract,
-    Disbursement,
     Evaluation,
     IdempotencyKey,
-    ManualReview,
     Offer,
     User,
 )
@@ -34,25 +31,21 @@ from ..schemas import (
     ApplicationDetail,
     ApplicationSummary,
     ApplicationUpdate,
-    BankQueueItem,
-    ContractOut,
-    DisbursementOut,
+    DeclineOfferResponse,
+    EvaluationOut,
     EventOut,
     MLEvaluation,
     MLRequest,
     OfferOut,
     QuestionnaireData,
-    ReviewResponse,
     RevisionOut,
-    SignResponse,
     WithdrawResponse,
 )
 from .notification_service import send_status_change_email
 
-CLIENT_ROLE = "client"
-BANK_ROLE = "bank"
+log = logging.getLogger("app.applications")
+
 OFFER_TTL_DAYS = 7
-MANUAL_OFFER_RATE = 20.0
 
 _ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
     ApplicationStatus.DRAFT: {ApplicationStatus.SUBMITTED, ApplicationStatus.WITHDRAWN},
@@ -63,7 +56,10 @@ _ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
         ApplicationStatus.REJECTED,
         ApplicationStatus.WITHDRAWN,
     },
-    ApplicationStatus.NEEDS_INFO: {ApplicationStatus.WITHDRAWN},
+    ApplicationStatus.NEEDS_INFO: {
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.WITHDRAWN,
+    },
     ApplicationStatus.ENRICHMENT: {
         ApplicationStatus.SCORING,
         ApplicationStatus.NEEDS_INFO,
@@ -71,13 +67,6 @@ _ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
         ApplicationStatus.WITHDRAWN,
     },
     ApplicationStatus.SCORING: {
-        ApplicationStatus.OFFER_MADE,
-        ApplicationStatus.NEEDS_INFO,
-        ApplicationStatus.MANUAL_REVIEW,
-        ApplicationStatus.REJECTED,
-        ApplicationStatus.WITHDRAWN,
-    },
-    ApplicationStatus.MANUAL_REVIEW: {
         ApplicationStatus.OFFER_MADE,
         ApplicationStatus.NEEDS_INFO,
         ApplicationStatus.REJECTED,
@@ -89,27 +78,11 @@ _ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
         ApplicationStatus.OFFER_EXPIRED,
         ApplicationStatus.WITHDRAWN,
     },
-    ApplicationStatus.OFFER_ACCEPTED: {
-        ApplicationStatus.SIGNING,
-        ApplicationStatus.WITHDRAWN,
-    },
-    ApplicationStatus.SIGNING: {
-        ApplicationStatus.SIGNED,
-        ApplicationStatus.WITHDRAWN,
-    },
-    ApplicationStatus.SIGNED: {
-        ApplicationStatus.DISBURSING,
-        ApplicationStatus.WITHDRAWN,
-    },
-    ApplicationStatus.DISBURSING: {
-        ApplicationStatus.DISBURSED,
-        ApplicationStatus.DISBURSEMENT_FAILED,
-    },
+    ApplicationStatus.OFFER_ACCEPTED: {ApplicationStatus.WITHDRAWN},
 }
 
 
 def list_client_applications(session: Session, user: User) -> list[ApplicationSummary]:
-    _require_role(user, CLIENT_ROLE)
     company_id = _client_company_id(session, user)
 
     applications = session.scalars(
@@ -129,6 +102,9 @@ def list_client_applications(session: Session, user: User) -> list[ApplicationSu
                 product_id=application.product_id,
                 status=application.status,
                 current_revision_id=application.current_revision_id,
+                current_revision=(
+                    RevisionOut.model_validate(revision) if revision else None
+                ),
                 amount=data.get("amount"),
                 term_months=data.get("term_months"),
                 created_at=application.created_at,
@@ -142,7 +118,6 @@ def create_application(
     user: User,
     payload: ApplicationCreate,
 ) -> ApplicationDetail:
-    _require_role(user, CLIENT_ROLE)
     company_id = _client_company_id(session, user)
 
     application = Application(
@@ -188,8 +163,11 @@ def update_application(
     payload: ApplicationUpdate,
 ) -> ApplicationDetail:
     application = _client_application(session, user, application_id)
-    if application.status != ApplicationStatus.DRAFT:
-        raise _conflict("only DRAFT applications can be edited")
+    if application.status not in {
+        ApplicationStatus.DRAFT,
+        ApplicationStatus.NEEDS_INFO,
+    }:
+        raise _conflict("only DRAFT or NEEDS_INFO applications can be edited")
 
     current = _revision(session, application)
     if current is None:
@@ -210,8 +188,8 @@ def update_application(
         ApplicationEvent(
             application_id=application.id,
             event_type="REVISION_CREATED",
-            from_status=ApplicationStatus.DRAFT,
-            to_status=ApplicationStatus.DRAFT,
+            from_status=application.status,
+            to_status=application.status,
             actor_id=user.id,
             payload={"revision_id": revision.id, "version": revision.version},
         )
@@ -227,8 +205,11 @@ async def submit_application(
     ml_client: MLClient,
 ) -> ApplicationDetail:
     application = _client_application(session, user, application_id)
-    if application.status != ApplicationStatus.DRAFT:
-        raise _conflict("only DRAFT applications can be submitted")
+    if application.status not in {
+        ApplicationStatus.DRAFT,
+        ApplicationStatus.NEEDS_INFO,
+    }:
+        raise _conflict("only DRAFT or NEEDS_INFO applications can be submitted")
 
     revision = _revision(session, application)
     if revision is None:
@@ -278,11 +259,18 @@ async def submit_application(
     ml_payload = MLRequest(
         application_id=application.id,
         revision_id=revision.id,
+        revision_version=revision.version,
         product_id=application.product_id,
         amount=data.amount,
         term_months=data.term_months,
         company_age_months=data.company_age_months,
         monthly_revenue=data.monthly_revenue,
+        monthly_cash_available_for_debt_service_rub=(
+            data.monthly_cash_available_for_debt_service_rub
+        ),
+        revenue_cv_12m=data.revenue_cv_12m,
+        largest_customer_share=data.largest_customer_share,
+        credit_report_consent_valid=data.credit_report_consent_valid,
         purpose=data.purpose,
         has_collateral=data.has_collateral,
         existing_debt=data.existing_debt,
@@ -290,20 +278,80 @@ async def submit_application(
 
     try:
         raw = await ml_client.evaluate(ml_payload.model_dump(mode="json"))
-        evaluation_result = MLEvaluation.model_validate(raw)
     except Exception as exc:
+        log.error(
+            "ml evaluation failed",
+            extra={"application_id": application.id, "err": str(exc)},
+        )
         raise apperr.wrap(
             apperr.new(502, "ml_error", "evaluation service failed"), exc
         ) from exc
 
+    if not isinstance(raw, dict):
+        log.error(
+            "ml returned non-object response",
+            extra={"application_id": application.id, "response_type": type(raw).__name__},
+        )
+        raise apperr.new(502, "invalid_ml_response", "invalid evaluation response")
+
+    if raw.get("decision") == "MANUAL_REVIEW":
+        log.error(
+            "ml returned unsupported decision",
+            extra={
+                "application_id": application.id,
+                "revision_id": revision.id,
+                "decision": raw.get("decision"),
+                "reason_codes": raw.get("reason_codes"),
+                "engine_version": raw.get("engine_version"),
+            },
+        )
+        raise apperr.new(
+            502,
+            "unsupported_ml_decision",
+            "ML returned unsupported decision",
+        )
+
+    try:
+        evaluation_result = MLEvaluation.model_validate(raw)
+    except Exception as exc:
+        log.error(
+            "invalid ml response",
+            extra={
+                "application_id": application.id,
+                "err": str(exc),
+                "decision": raw.get("decision"),
+            },
+        )
+        raise apperr.wrap(
+            apperr.new(502, "invalid_ml_response", "invalid evaluation response"), exc
+        ) from exc
+
+    reasons = (
+        [reason.model_dump(mode="json") for reason in evaluation_result.reasons]
+        if evaluation_result.reasons
+        else [
+            {"code": code, "text": code}
+            for code in evaluation_result.reason_codes
+        ]
+    )
     evaluation = Evaluation(
         application_id=application.id,
         revision_id=revision.id,
         decision=evaluation_result.decision,
-        risk_score=evaluation_result.risk,
-        risk_category=_risk_category(evaluation_result.risk),
-        offer_data=evaluation_result.offer.model_dump(mode="json") if evaluation_result.offer else {},
-        reason_codes=list(evaluation_result.reason_codes),
+        risk_score=evaluation_result.risk_score,
+        risk_category=(
+            evaluation_result.risk_band
+            or _risk_category(evaluation_result.risk_score)
+        ),
+        offer_data=(
+            evaluation_result.offer.model_dump(mode="json")
+            if evaluation_result.offer
+            else {}
+        ),
+        reason_codes=reasons,
+        risk_details=evaluation_result.risk_details or None,
+        missing_fields=list(evaluation_result.missing_fields),
+        next_action=evaluation_result.next_action,
         engine_version=evaluation_result.engine_version,
         policy_version=evaluation_result.policy_version,
     )
@@ -338,13 +386,6 @@ async def submit_application(
             session,
             application,
             ApplicationStatus.NEEDS_INFO,
-            payload={"evaluation_id": evaluation.id},
-        )
-    elif evaluation_result.decision == "MANUAL_REVIEW":
-        _transition(
-            session,
-            application,
-            ApplicationStatus.MANUAL_REVIEW,
             payload={"evaluation_id": evaluation.id},
         )
     else:
@@ -392,76 +433,65 @@ def accept_offer(
         actor_id=user.id,
         payload={"offer_id": offer.id},
     )
+    evaluation = (
+        session.get(Evaluation, offer.evaluation_id)
+        if offer.evaluation_id is not None
+        else None
+    )
     return AcceptOfferResponse(
         status=application.status,
-        offer=OfferOut.model_validate(offer),
+        offer=_offer_out(
+            offer,
+            {evaluation.id: evaluation} if evaluation is not None else {},
+        ),
     )
 
 
-def sign_application(session: Session, user: User, application_id: int) -> SignResponse:
+def decline_offer(
+    session: Session,
+    user: User,
+    application_id: int,
+    offer_id: int,
+) -> DeclineOfferResponse:
     application = _client_application(session, user, application_id)
-    if application.status != ApplicationStatus.OFFER_ACCEPTED:
-        raise _conflict("application is not ready for signing")
+    if application.status != ApplicationStatus.OFFER_MADE:
+        raise _conflict("application is not waiting for an offer decision")
 
-    offer = session.scalar(
-        select(Offer)
-        .where(
-            Offer.application_id == application.id,
-            Offer.status == "accepted",
+    offer = session.get(Offer, offer_id)
+    if offer is None or offer.application_id != application.id:
+        raise apperr.ERR_NOT_FOUND
+    if offer.status != "offered":
+        raise _conflict("offer is not active")
+    if offer.expires_at is not None and _aware(offer.expires_at) <= _now():
+        offer.status = "expired"
+        _transition(
+            session,
+            application,
+            ApplicationStatus.OFFER_EXPIRED,
+            actor_id=user.id,
+            payload={"offer_id": offer.id},
         )
-        .order_by(Offer.id.desc())
-    )
-    if offer is None:
-        raise _conflict("accepted offer not found")
+        raise _conflict("offer expired")
 
+    offer.status = "declined"
     _transition(
         session,
         application,
-        ApplicationStatus.SIGNING,
+        ApplicationStatus.OFFER_DECLINED,
         actor_id=user.id,
         payload={"offer_id": offer.id},
     )
-
-    contract = Contract(
-        application_id=application.id,
-        offer_id=offer.id,
-        status="signed",
-        signed_at=_now(),
+    evaluation = (
+        session.get(Evaluation, offer.evaluation_id)
+        if offer.evaluation_id is not None
+        else None
     )
-    session.add(contract)
-    session.flush()
-    _transition(
-        session,
-        application,
-        ApplicationStatus.SIGNED,
-        actor_id=user.id,
-        payload={"contract_id": contract.id},
-    )
-    _transition(
-        session,
-        application,
-        ApplicationStatus.DISBURSING,
-        payload={"contract_id": contract.id},
-    )
-
-    disbursement = Disbursement(
-        application_id=application.id,
-        status="success",
-        amount=offer.amount,
-    )
-    session.add(disbursement)
-    session.flush()
-    _transition(
-        session,
-        application,
-        ApplicationStatus.DISBURSED,
-        payload={"disbursement_id": disbursement.id},
-    )
-
-    return SignResponse(
+    return DeclineOfferResponse(
         status=application.status,
-        contract=ContractOut.model_validate(contract),
-        disbursement=DisbursementOut.model_validate(disbursement),
+        offer=_offer_out(
+            offer,
+            {evaluation.id: evaluation} if evaluation is not None else {},
+        ),
     )
 
 
@@ -476,113 +506,6 @@ def withdraw_application(
 
     _transition(session, application, ApplicationStatus.WITHDRAWN, actor_id=user.id)
     return WithdrawResponse(id=application.id, status=application.status)
-
-
-def bank_queue(session: Session, user: User) -> list[BankQueueItem]:
-    _require_role(user, BANK_ROLE)
-
-    rows = session.execute(
-        select(Application, Company, ApplicationRevision)
-        .join(Company, Company.id == Application.company_id)
-        .outerjoin(
-            ApplicationRevision,
-            ApplicationRevision.id == Application.current_revision_id,
-        )
-        .where(Application.status == ApplicationStatus.MANUAL_REVIEW)
-        .order_by(Application.id)
-    ).all()
-
-    result: list[BankQueueItem] = []
-    for application, company, revision in rows:
-        data = _revision_data(revision)
-        result.append(
-            BankQueueItem(
-                id=application.id,
-                company_id=application.company_id,
-                company_name=company.name,
-                product_id=application.product_id,
-                status=application.status,
-                amount=data.get("amount"),
-                term_months=data.get("term_months"),
-                company_age_months=data.get("company_age_months"),
-                created_at=application.created_at,
-            )
-        )
-    return result
-
-
-def review_application(
-    session: Session,
-    user: User,
-    application_id: int,
-    decision: str,
-    reason: str | None,
-) -> ReviewResponse:
-    _require_role(user, BANK_ROLE)
-
-    application = session.get(Application, application_id)
-    if application is None:
-        raise apperr.ERR_NOT_FOUND
-    if application.status != ApplicationStatus.MANUAL_REVIEW:
-        raise _conflict("application is not in manual review")
-
-    review = ManualReview(
-        application_id=application.id,
-        underwriter_id=user.id,
-        decision=decision,
-        reason=reason,
-    )
-    session.add(review)
-    session.flush()
-
-    offer: Offer | None = None
-    if decision == "APPROVE":
-        revision = _revision(session, application)
-        if revision is None:
-            raise _conflict("application has no current revision")
-        data = QuestionnaireData.model_validate(revision.data)
-        offer = Offer(
-            application_id=application.id,
-            evaluation_id=None,
-            amount=float(data.amount),
-            term=data.term_months,
-            rate=MANUAL_OFFER_RATE,
-            payment=_annuity(float(data.amount), MANUAL_OFFER_RATE, data.term_months),
-            expires_at=_now() + timedelta(days=OFFER_TTL_DAYS),
-            status="offered",
-        )
-        session.add(offer)
-        session.flush()
-        _transition(
-            session,
-            application,
-            ApplicationStatus.OFFER_MADE,
-            actor_id=user.id,
-            payload={"manual_review_id": review.id, "offer_id": offer.id},
-        )
-    elif decision == "REJECT":
-        _transition(
-            session,
-            application,
-            ApplicationStatus.REJECTED,
-            actor_id=user.id,
-            payload={"manual_review_id": review.id, "reason": reason},
-        )
-    else:
-        _transition(
-            session,
-            application,
-            ApplicationStatus.NEEDS_INFO,
-            actor_id=user.id,
-            payload={"manual_review_id": review.id, "reason": reason},
-        )
-
-    return ReviewResponse(
-        application_id=application.id,
-        status=application.status,
-        manual_review_id=review.id,
-        offer=OfferOut.model_validate(offer) if offer else None,
-    )
 
 
 def make_request_hash(method: str, path: str, payload: Any) -> str:
@@ -678,11 +601,6 @@ def _add_check(
     )
 
 
-def _require_role(user: User, role: str) -> None:
-    if user.role != role:
-        raise apperr.ERR_FORBIDDEN
-
-
 def _client_company_id(session: Session, user: User) -> int:
     membership = session.scalar(
         select(CompanyMembership)
@@ -702,7 +620,6 @@ def _client_application(
     user: User,
     application_id: int,
 ) -> Application:
-    _require_role(user, CLIENT_ROLE)
     company_id = _client_company_id(session, user)
     application = session.get(Application, application_id)
     if application is None:
@@ -720,7 +637,6 @@ def _client_emails(session: Session, company_id: int) -> list[str]:
             .where(
                 CompanyMembership.company_id == company_id,
                 CompanyMembership.is_confirmed.is_(True),
-                User.role == CLIENT_ROLE,
             )
             .order_by(User.id)
         ).all()
@@ -739,38 +655,63 @@ def _revision_data(revision: ApplicationRevision | None) -> dict[str, Any]:
 
 def _application_detail(session: Session, application: Application) -> ApplicationDetail:
     revision = _revision(session, application)
-    offer = session.scalar(
+    offers = session.scalars(
         select(Offer)
         .where(Offer.application_id == application.id)
-        .order_by(Offer.id.desc())
-    )
+        .order_by(Offer.id)
+    ).all()
+    evaluations = session.scalars(
+        select(Evaluation)
+        .where(Evaluation.application_id == application.id)
+        .order_by(Evaluation.id)
+    ).all()
     events = session.scalars(
         select(ApplicationEvent)
         .where(ApplicationEvent.application_id == application.id)
         .order_by(ApplicationEvent.id)
     ).all()
 
+    evaluations_by_id = {evaluation.id: evaluation for evaluation in evaluations}
+    offer_outputs = [
+        _offer_out(offer, evaluations_by_id) for offer in offers
+    ]
+
     detail = ApplicationDetail.model_validate(application)
-    detail.revision = RevisionOut.model_validate(revision) if revision else None
-    detail.offer = OfferOut.model_validate(offer) if offer else None
+    revision_out = RevisionOut.model_validate(revision) if revision else None
+    detail.revision = revision_out
+    detail.current_revision = revision_out
+    detail.offer = offer_outputs[-1] if offer_outputs else None
+    detail.offers = offer_outputs
+    detail.evaluations = [
+        EvaluationOut.model_validate(evaluation) for evaluation in evaluations
+    ]
     detail.events = [EventOut.model_validate(event) for event in events]
     return detail
 
 
+def _offer_out(
+    offer: Offer,
+    evaluations_by_id: dict[int, Evaluation],
+) -> OfferOut:
+    output = OfferOut.model_validate(offer)
+    evaluation = (
+        evaluations_by_id.get(offer.evaluation_id)
+        if offer.evaluation_id is not None
+        else None
+    )
+    if evaluation is not None and isinstance(evaluation.offer_data, dict):
+        dscr = evaluation.offer_data.get("dscr")
+        if isinstance(dscr, (int, float)):
+            output.dscr = float(dscr)
+    return output
+
+
 def _risk_category(risk: float) -> str:
-    if risk < 0.34:
-        return "low"
-    if risk < 0.67:
-        return "medium"
-    return "high"
-
-
-def _annuity(amount: float, annual_rate: float, term_months: int) -> float:
-    monthly_rate = annual_rate / 100 / 12
-    if monthly_rate == 0:
-        return round(amount / term_months, 2)
-    payment = amount * monthly_rate / (1 - (1 + monthly_rate) ** -term_months)
-    return round(payment, 2)
+    if risk < 34:
+        return "LOW"
+    if risk < 67:
+        return "MEDIUM"
+    return "HIGH"
 
 
 def _now() -> datetime:

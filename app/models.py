@@ -20,6 +20,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+# Schema changed: run `make reset-db` once after applying this model set.
+
 
 class Base(DeclarativeBase):
     pass
@@ -32,19 +34,13 @@ class ApplicationStatus(str, Enum):
     NEEDS_INFO = "NEEDS_INFO"
     ENRICHMENT = "ENRICHMENT"
     SCORING = "SCORING"
-    MANUAL_REVIEW = "MANUAL_REVIEW"
     OFFER_MADE = "OFFER_MADE"
     OFFER_ACCEPTED = "OFFER_ACCEPTED"
-    SIGNING = "SIGNING"
-    SIGNED = "SIGNED"
-    DISBURSING = "DISBURSING"
-    DISBURSEMENT_FAILED = "DISBURSEMENT_FAILED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
     WITHDRAWN = "WITHDRAWN"
     OFFER_DECLINED = "OFFER_DECLINED"
     OFFER_EXPIRED = "OFFER_EXPIRED"
-    DISBURSED = "DISBURSED"
 
 
 def _status_enum() -> SAEnum:
@@ -77,7 +73,6 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     full_name: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(16), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -90,7 +85,6 @@ class CompanyMembership(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
-    role: Mapped[str] = mapped_column(String(32), default="member")
     permissions: Mapped[list[str]] = mapped_column(JSON, default=list)
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -182,7 +176,12 @@ class Evaluation(Base):
     risk_score: Mapped[float] = mapped_column(Float)
     risk_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
     offer_data: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
-    reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    reason_codes: Mapped[list[object]] = mapped_column(JSON, default=list)
+    risk_details: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    missing_fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    next_action: Mapped[str | None] = mapped_column(String(64), nullable=True)
     engine_version: Mapped[str] = mapped_column(String(32))
     policy_version: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(
@@ -208,49 +207,6 @@ class Offer(Base):
         DateTime(timezone=True), nullable=True
     )
     status: Mapped[str] = mapped_column(String(32), default="offered")
-
-
-class ManualReview(Base):
-    __tablename__ = "manual_reviews"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    application_id: Mapped[int] = mapped_column(
-        ForeignKey("applications.id"), index=True
-    )
-    underwriter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    decision: Mapped[str] = mapped_column(String(32))
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-
-class Contract(Base):
-    __tablename__ = "contracts"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    application_id: Mapped[int] = mapped_column(
-        ForeignKey("applications.id"), index=True
-    )
-    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), index=True)
-    status: Mapped[str] = mapped_column(String(32), default="draft")
-    signed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class Disbursement(Base):
-    __tablename__ = "disbursements"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    application_id: Mapped[int] = mapped_column(
-        ForeignKey("applications.id"), index=True
-    )
-    status: Mapped[str] = mapped_column(String(32))
-    amount: Mapped[float] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
 
 
 class ApplicationEvent(Base):

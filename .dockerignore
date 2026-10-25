@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+*.db
+*.db-wal
+*.db-shm
+.env
+Alpha-front/node_modules
+Alpha-front/dist

@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.orm import Session
 
-from .. import apperr, responses
+from .. import responses
 from ..models import User
 from ..platform.db import get_db
 from ..schemas import ApplicationCreate, ApplicationUpdate
@@ -104,26 +104,26 @@ def accept_offer(
     return responses.ok(body)
 
 
-@router.post("/applications/{application_id}/sign")
-def sign_application(
+@router.post("/applications/{application_id}/offers/{offer_id}/decline")
+def decline_offer(
     application_id: int,
+    offer_id: int,
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
     key = _key(idempotency_key)
-    if key is None:
-        raise apperr.new(400, "bad_request", "Idempotency-Key is required")
+    request_hash = _hash(request, {}) if key else ""
+    if key:
+        cached = service.get_idempotent_response(db, key, request_hash)
+        if cached is not None:
+            return responses.ok(cached)
 
-    request_hash = _hash(request, {})
-    cached = service.get_idempotent_response(db, key, request_hash)
-    if cached is not None:
-        return responses.ok(cached)
-
-    result = service.sign_application(db, user, application_id)
+    result = service.decline_offer(db, user, application_id, offer_id)
     body = result.model_dump(mode="json")
-    service.save_idempotent_response(db, key, request_hash, body)
+    if key:
+        service.save_idempotent_response(db, key, request_hash, body)
     return responses.ok(body)
 
 

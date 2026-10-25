@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import type { ReactNode } from 'react'
 
 import { api, AUTH_TOKEN_KEY, AUTH_USER_KEY } from '@/lib/api'
-import type { JwtPayload, LoginResponse, User, UserRole } from '@/lib/types'
+import type { JwtPayload, LoginResponse, User } from '@/lib/types'
 
 interface AuthContextValue {
   user: User | null
@@ -13,10 +13,6 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
-
-function isUserRole(value: unknown): value is UserRole {
-  return value === 'client' || value === 'bank'
-}
 
 function decodeJwt(token: string): JwtPayload {
   const encoded = token.split('.')[1]
@@ -37,15 +33,10 @@ function readStoredUser(): User | null {
 
   try {
     const parsed = JSON.parse(raw) as Partial<User>
-    if (
-      typeof parsed.id === 'number' &&
-      typeof parsed.email === 'string' &&
-      isUserRole(parsed.role)
-    ) {
+    if (typeof parsed.id === 'number' && typeof parsed.email === 'string') {
       return {
         id: parsed.id,
         email: parsed.email,
-        role: parsed.role,
       }
     }
   } catch {
@@ -70,11 +61,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const payload = response.data
     const claims = decodeJwt(payload.access_token)
 
-    const role = payload.role ?? claims.role
-    if (!isUserRole(role)) {
-      throw new Error('В токене отсутствует роль пользователя')
-    }
-
     const rawId = payload.user_id ?? claims.sub ?? claims.uid
     const id = Number(rawId)
     if (!Number.isFinite(id)) {
@@ -84,7 +70,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const nextUser: User = {
       id,
       email: payload.email ?? email,
-      role,
     }
 
     localStorage.setItem(AUTH_TOKEN_KEY, payload.access_token)
