@@ -24,7 +24,7 @@ client@demo.ru / password123
 
 | Требование | Статус | Где реализовано |
 |---|---|---|
-| B2C без банков и ручного review | ✅ | `ApplicationStatus`, `credit_engine` с `staff_review=False` |
+| B2C без ручного review банками | ✅ | `ApplicationStatus`, `credit_engine` с `staff_review=False` |
 | Email + JWT auth | ✅ | `/api/auth/login`, `AuthContext` |
 | FSM из 13 статусов | ✅ | `app/services/application_service.py` |
 | Локальный credit engine | ✅ | `app/platform/ai/credit_engine.py` |
