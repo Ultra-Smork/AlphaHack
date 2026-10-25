@@ -1,0 +1,79 @@
+THIRD PARTY NOTICES — Суирники3
+
+Проект использует сторонние open-source компоненты. Точные версии зафиксированы в:
+- requirements.lock
+- Alpha-front/package-lock.json
+
+Тексты лицензий доступны в исходных пакетах и их репозиториях. Этот файл не заменяет юридическую проверку лицензий.
+
+BACKEND
+
+FastAPI — MIT
+Starlette — BSD-3-Clause
+Uvicorn — BSD-3-Clause
+Pydantic — MIT
+pydantic-settings — MIT
+SQLAlchemy — MIT
+PyJWT — MIT
+email-validator — CC0-1.0
+httpx — BSD-3-Clause
+anyio — MIT
+python-dotenv — BSD-3-Clause
+PyYAML — MIT
+httptools — MIT
+uvloop — MIT
+watchfiles — MIT
+websockets — BSD-3-Clause
+certifi — MPL-2.0
+idna — BSD-3-Clause
+dnspython — ISC
+click — BSD-3-Clause
+h11 — MIT
+httpcore — BSD-3-Clause
+annotated-types — MIT
+typing_extensions — PSF-2.0
+opentelemetry-api — Apache-2.0
+
+FRONTEND
+
+React — MIT
+React DOM — MIT
+React Router — MIT
+axios — MIT
+clsx — MIT
+tailwind-merge — MIT
+class-variance-authority — Apache-2.0
+lucide-react — ISC
+@radix-ui/react-dialog — MIT
+@radix-ui/react-label — MIT
+@radix-ui/react-slot — MIT
+@radix-ui/react-toast — MIT
+Tailwind CSS — MIT
+tailwindcss-animate — MIT
+Vite — MIT
+TypeScript — Apache-2.0
+ESLint — MIT
+PostCSS — MIT
+Autoprefixer — MIT
+
+CREDIT ENGINE
+
+app/platform/ai/credit_engine.py — собственный демонстрационный движок проекта.
+Сторонние ML-модели и датасеты не используются.
+
+СМОДЕЛИРОВАННЫЕ ИНТЕГРАЦИИ
+
+В demo-режиме реальные внешние сервисы не вызываются:
+- ЕГРЮЛ / registry check — mock;
+- БКИ / credit history — mock;
+- antifraud — mock;
+- email notifications — print в stdout.
+
+Эти интеграции обозначены в коде как mock/TODO и не являются реальными подключениями.
+
+DOCKER BASE IMAGES
+
+python:3.12-slim — Python Software Foundation,
+node:22-alpine — Node.js / Alpine Linux.
+
+Лицензии базовых образов и входящих в них пакетов регулируются их собственными условиями.

@@ -159,6 +159,47 @@ def test_credit_engine_product_limit_explanation():
     assert reason["details"]["action"]
 
 
+def test_missing_revenue_returns_needs_info_with_explanation():
+    cfg = Config(
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        jwt_secret="test-secret-key-at-least-32-bytes",
+        ml_mode="engine",
+    )
+    database = db.open_db(cfg)
+    db.auto_migrate(database.engine)
+    app = create_app(cfg, database)
+    with TestClient(app) as test_client:
+        token = login(test_client, "client@demo.ru")
+        created = test_client.post(
+            "/api/applications",
+            headers=auth(token),
+            json={
+                "product_id": 1,
+                "data": {
+                    "amount": 1_000_000,
+                    "term_months": 24,
+                    "company_age_months": 36,
+                    "credit_report_consent_valid": True,
+                },
+            },
+        )
+        assert created.status_code == 200
+        application_id = created.json()["data"]["id"]
+        submitted = test_client.post(
+            f"/api/applications/{application_id}/submit",
+            headers=auth(token),
+        )
+        assert submitted.status_code == 200
+        detail = submitted.json()["data"]
+        assert detail["status"] == "NEEDS_INFO"
+        evaluation = detail["evaluations"][-1]
+        assert evaluation["risk_score"] == 0
+        assert evaluation["risk_category"] is None
+        assert evaluation["missing_fields"]
+        assert evaluation["reason_codes"][0]["code"] == "MISSING_REQUIRED_INFORMATION"
+
+
 def test_submit_runs_through_credit_engine():
     cfg = Config(
         app_env="test",

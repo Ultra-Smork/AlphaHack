@@ -99,6 +99,12 @@ export function getApiErrorMessage(
   if (!error.response) {
     return 'Нет соединения. Проверьте интернет.'
   }
+  if (error.response.status === 503) {
+    return (
+      error.response.data?.error?.message ??
+      'Сервис оценки временно недоступен. Попробуйте позже.'
+    )
+  }
   if (error.response.status >= 500) {
     return 'Сервис временно недоступен. Попробуйте через минуту.'
   }

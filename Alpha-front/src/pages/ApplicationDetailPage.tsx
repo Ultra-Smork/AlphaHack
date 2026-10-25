@@ -317,6 +317,7 @@ export function ApplicationDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [action, setAction] = useState<Action | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [editLoading, setEditLoading] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
@@ -498,6 +499,7 @@ export function ApplicationDetailPage() {
       return
     }
 
+    setActionError(null)
     setActionLoading(true)
     try {
       let response
@@ -522,6 +524,7 @@ export function ApplicationDetailPage() {
       }
 
       setAction(null)
+      setActionError(null)
       if (isApplicationDetail(response.data)) {
         setApplication(response.data)
       } else {
@@ -529,7 +532,10 @@ export function ApplicationDetailPage() {
       }
       toast.success('Заявка обновлена')
     } catch (cause) {
-      toast.error(getApiErrorMessage(cause, 'Ошибка'))
+      const message = getApiErrorMessage(cause, 'Ошибка')
+      setAction(null)
+      setActionError(message)
+      toast.error(message)
     } finally {
       setActionLoading(false)
     }
@@ -577,12 +583,6 @@ export function ApplicationDetailPage() {
   }
 
   const isProcessing = PROCESSING_STATUSES.has(application.status)
-  const rejectedReason = latestEvaluation?.reason_codes?.[0]
-  const rejectedText = rejectedReason ? reasonText(rejectedReason) : null
-  const rejectedCode = rejectedReason ? reasonCode(rejectedReason) : null
-  const rejectedDetails = rejectedReason
-    ? reasonDetails(rejectedReason)
-    : null
   const riskCategory = latestEvaluation?.risk_category?.toUpperCase()
   const hasRisk = Boolean(riskCategory)
   const riskBoxClass =
@@ -625,6 +625,24 @@ export function ApplicationDetailPage() {
           <p className="text-sm text-blue-800">
             Это черновик. Подайте заявку, чтобы нейросеть ее оценила.
           </p>
+        </div>
+      ) : null}
+
+      {application.status === 'NEEDS_INFO' ? (
+        <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4">
+          <p className="text-sm font-medium text-yellow-900">
+            Недостаточно данных для оценки риска.
+          </p>
+          <p className="mt-1 text-sm text-yellow-800">
+            Дополните заявку и проверьте, каких сведений не хватает.
+          </p>
+          {latestEvaluation?.missing_fields?.length ? (
+            <ul className="mt-2 list-inside list-disc text-sm text-yellow-800">
+              {latestEvaluation.missing_fields.map((field) => (
+                <li key={field}>{MISSING_FIELD_LABELS[field] ?? field}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
 
@@ -965,34 +983,45 @@ export function ApplicationDetailPage() {
             <p className="text-sm font-medium text-red-800">
               Заявка не одобрена.
             </p>
-            {rejectedText ? (
-              <p className="mt-1 text-sm text-red-700">{rejectedText}</p>
-            ) : null}
-            {rejectedDetails ? (
-              <div className="mt-3 space-y-1 rounded-md bg-white/60 p-3 text-sm text-gray-700">
-                {rejectedDetails.title && rejectedDetails.current ? (
-                  <p>
-                    <span className="font-medium">
-                      {rejectedDetails.title}:
-                    </span>{' '}
-                    {rejectedDetails.current}
-                  </p>
-                ) : null}
-                {rejectedDetails.limit ? (
-                  <p className="text-xs text-gray-600">
-                    {rejectedDetails.limit}
-                  </p>
-                ) : null}
-                {rejectedDetails.action ? (
-                  <p className="text-xs font-medium text-red-700">
-                    Что сделать: {rejectedDetails.action}
-                  </p>
-                ) : null}
+            {latestEvaluation?.reason_codes.length ? (
+              <div className="mt-3 space-y-3">
+                {latestEvaluation.reason_codes.map((reason, index) => {
+                  const details = reasonDetails(reason)
+                  return (
+                    <div
+                      key={`${reasonCode(reason)}-${index}`}
+                      className="rounded-md bg-white/70 p-3 text-sm text-gray-700"
+                    >
+                      <p className="font-medium text-red-800">
+                        {reasonText(reason)}
+                      </p>
+                      {details?.title && details.current ? (
+                        <p className="mt-1">
+                          {details.title}: {details.current}
+                        </p>
+                      ) : null}
+                      {details?.limit ? (
+                        <p className="text-xs text-gray-600">
+                          {details.limit}
+                        </p>
+                      ) : null}
+                      {details?.action ? (
+                        <p className="mt-1 text-xs font-medium text-red-700">
+                          Что сделать: {details.action}
+                        </p>
+                      ) : null}
+                      <p className="mt-1 text-xs text-gray-400">
+                        {reasonCode(reason)}
+                      </p>
+                    </div>
+                  )
+                })}
               </div>
-            ) : null}
-            {rejectedCode ? (
-              <p className="mt-2 text-xs text-gray-500">{rejectedCode}</p>
-            ) : null}
+            ) : (
+              <p className="mt-1 text-sm text-red-700">
+                Причина не указана. Попробуйте изменить параметры заявки.
+              </p>
+            )}
           </div>
         ) : null}
 
@@ -1007,6 +1036,15 @@ export function ApplicationDetailPage() {
           </div>
         ) : null}
       </div>
+
+      {actionError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-medium text-red-800">
+            Не удалось выполнить действие
+          </p>
+          <p className="mt-1 text-sm text-red-700">{actionError}</p>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={action !== null}

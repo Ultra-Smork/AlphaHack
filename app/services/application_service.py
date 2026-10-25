@@ -24,7 +24,7 @@ from ..models import (
     Offer,
     User,
 )
-from ..platform.ai.ml_client import MLClient
+from ..platform.ai.ml_client import MLClient, MLValidationError
 from ..schemas import (
     AcceptOfferResponse,
     ApplicationCreate,
@@ -216,46 +216,6 @@ async def submit_application(
         raise _conflict("application has no current revision")
     data = QuestionnaireData.model_validate(revision.data)
 
-    _transition(session, application, ApplicationStatus.SUBMITTED, actor_id=user.id)
-    _transition(session, application, ApplicationStatus.INTAKE_CHECK)
-
-    completeness = "passed" if data.monthly_revenue is not None else "needs_info"
-    _add_check(
-        session,
-        application.id,
-        check_type="DATA_COMPLETENESS",
-        status=completeness,
-        source="mock",
-        fixture_id="fixture:data:v1",
-    )
-    if completeness == "needs_info":
-        _transition(session, application, ApplicationStatus.NEEDS_INFO)
-        return _application_detail(session, application)
-
-    stop_factor = data.company_age_months < 6 or data.amount > 10_000_000
-    _add_check(
-        session,
-        application.id,
-        check_type="STOP_FACTOR",
-        status="failed" if stop_factor else "passed",
-        source="mock",
-        fixture_id="fixture:stop-factor:v1",
-    )
-    if stop_factor:
-        _transition(session, application, ApplicationStatus.REJECTED)
-        return _application_detail(session, application)
-
-    _transition(session, application, ApplicationStatus.ENRICHMENT)
-    _add_check(
-        session,
-        application.id,
-        check_type="ENRICHMENT",
-        status="passed",
-        source="mock",
-        fixture_id="fixture:enrichment:v1",
-    )
-    _transition(session, application, ApplicationStatus.SCORING)
-
     ml_payload = MLRequest(
         application_id=application.id,
         revision_id=revision.id,
@@ -278,13 +238,29 @@ async def submit_application(
 
     try:
         raw = await ml_client.evaluate(ml_payload.model_dump(mode="json"))
+    except MLValidationError as exc:
+        log.warning(
+            "credit engine rejected application data",
+            extra={"application_id": application.id, "errors": exc.errors},
+        )
+        details = "; ".join(exc.errors)
+        raise apperr.new(
+            422,
+            "invalid_application_data",
+            f"Проверьте данные заявки: {details}",
+        ) from exc
     except Exception as exc:
         log.error(
             "ml evaluation failed",
             extra={"application_id": application.id, "err": str(exc)},
         )
         raise apperr.wrap(
-            apperr.new(502, "ml_error", "evaluation service failed"), exc
+            apperr.new(
+                503,
+                "engine_unavailable",
+                "Сервис оценки временно недоступен. Попробуйте позже.",
+            ),
+            exc,
         ) from exc
 
     if not isinstance(raw, dict):
@@ -292,7 +268,11 @@ async def submit_application(
             "ml returned non-object response",
             extra={"application_id": application.id, "response_type": type(raw).__name__},
         )
-        raise apperr.new(502, "invalid_ml_response", "invalid evaluation response")
+        raise apperr.new(
+            503,
+            "invalid_engine_response",
+            "Сервис оценки вернул некорректный ответ. Попробуйте позже.",
+        )
 
     if raw.get("decision") == "MANUAL_REVIEW":
         log.error(
@@ -306,9 +286,9 @@ async def submit_application(
             },
         )
         raise apperr.new(
-            502,
+            503,
             "unsupported_ml_decision",
-            "ML returned unsupported decision",
+            "Сервис оценки вернул неподдерживаемое решение. Попробуйте позже.",
         )
 
     try:
@@ -323,8 +303,47 @@ async def submit_application(
             },
         )
         raise apperr.wrap(
-            apperr.new(502, "invalid_ml_response", "invalid evaluation response"), exc
+            apperr.new(
+                503,
+                "invalid_engine_response",
+                "Сервис оценки вернул некорректный ответ. Попробуйте позже.",
+            ),
+            exc,
         ) from exc
+
+    _transition(session, application, ApplicationStatus.SUBMITTED, actor_id=user.id)
+    _transition(session, application, ApplicationStatus.INTAKE_CHECK)
+
+    completeness = "passed" if data.monthly_revenue is not None else "needs_info"
+    _add_check(
+        session,
+        application.id,
+        check_type="DATA_COMPLETENESS",
+        status=completeness,
+        source="mock",
+        fixture_id="fixture:data:v1",
+    )
+
+    stop_factor = data.company_age_months < 6 or data.amount > 10_000_000
+    _add_check(
+        session,
+        application.id,
+        check_type="STOP_FACTOR",
+        status="failed" if stop_factor else "passed",
+        source="mock",
+        fixture_id="fixture:stop-factor:v1",
+    )
+
+    _transition(session, application, ApplicationStatus.ENRICHMENT)
+    _add_check(
+        session,
+        application.id,
+        check_type="ENRICHMENT",
+        status="passed",
+        source="mock",
+        fixture_id="fixture:enrichment:v1",
+    )
+    _transition(session, application, ApplicationStatus.SCORING)
 
     reasons = (
         [reason.model_dump(mode="json") for reason in evaluation_result.reasons]
@@ -341,7 +360,11 @@ async def submit_application(
         risk_score=evaluation_result.risk_score,
         risk_category=(
             evaluation_result.risk_band
-            or _risk_category(evaluation_result.risk_score)
+            or (
+                _risk_category(evaluation_result.risk_score)
+                if evaluation_result.risk_score > 0
+                else None
+            )
         ),
         offer_data=(
             evaluation_result.offer.model_dump(mode="json")

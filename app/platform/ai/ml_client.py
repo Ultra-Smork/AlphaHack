@@ -26,6 +26,14 @@ class MLError(RuntimeError):
     """The evaluation service failed or returned an invalid response."""
 
 
+class MLValidationError(MLError):
+    """The engine rejected the application payload."""
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = list(errors)
+        super().__init__("; ".join(self.errors))
+
+
 class MLClient(Protocol):
     async def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Return decision, risk, offer, reason_codes, and versions."""
@@ -90,9 +98,7 @@ class CreditEngineClient:
         try:
             result = evaluate(request, staff_review=False)
         except RequestError as exc:
-            raise MLError(
-                "credit engine rejected request: " + "; ".join(exc.errors)
-            ) from exc
+            raise MLValidationError(exc.errors) from exc
         except Exception as exc:
             raise MLError(f"credit engine failed: {exc}") from exc
 

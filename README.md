@@ -41,7 +41,7 @@ client@demo.ru / password123
 | Risk score и факторы | ✅ | `Evaluation.risk_score`, `risk_details` |
 | 4 демо-заявки | ✅ | `app/platform/seed.py` |
 | Docker one-container | ✅ | `Dockerfile`, `docker-compose.yml` |
-| 16 backend-тестов | ✅ | `pytest` |
+| 17 backend-тестов | ✅ | `pytest` |
 | Идемпотентность | ✅ частично | submit / accept / decline |
 | Реальные ЕГРЮЛ / БКИ / антифрод | ❌ | checks замоканы в `CreditEngineClient` |
 | Подписание и выдача денег | ❌ | не входят в MVP |
@@ -153,6 +153,22 @@ docker compose up --build
 ```
 
 SQLite хранится в volume `sqlite_data`, внутри контейнера: `/app/data/alphahack.db`.
+
+## Документация
+
+- [Архитектура](docs/architecture.md)
+- [FSM и статусы](docs/state-machine.md)
+- [Модель данных](docs/data-model.md)
+- [API](docs/api.md)
+- [OpenAPI JSON](docs/openapi.json)
+- [HTTP-запросы](docs/api.http)
+- [Тестовые сценарии](docs/test-scenarios.md)
+- [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)
+
+Зависимости зафиксированы:
+
+- backend: `requirements.lock`;
+- frontend: `Alpha-front/package-lock.json`.
 
 ## Демо-аккаунт
 

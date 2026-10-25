@@ -1,0 +1,65 @@
+@baseUrl = http://localhost:8000
+@token = PASTE_ACCESS_TOKEN_HERE
+@applicationId = 4
+@offerId = 4
+@idempotencyKey = local-demo-1
+
+### Health
+GET {{baseUrl}}/health
+
+### Login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "client@demo.ru",
+  "password": "password123"
+}
+
+### List applications
+GET {{baseUrl}}/api/applications
+Authorization: Bearer {{token}}
+
+### Create draft
+POST {{baseUrl}}/api/applications
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "product_id": 1,
+  "data": {
+    "amount": 1000000,
+    "term_months": 24,
+    "company_age_months": 36,
+    "monthly_revenue": 1500000,
+    "monthly_cash_available_for_debt_service_rub": 400000,
+    "revenue_cv_12m": 0.15,
+    "largest_customer_share": 0.25,
+    "credit_report_consent_valid": true,
+    "purpose": "Пополнение оборотных средств"
+  }
+}
+
+### Get application
+GET {{baseUrl}}/api/applications/{{applicationId}}
+Authorization: Bearer {{token}}
+
+### Submit application
+POST {{baseUrl}}/api/applications/{{applicationId}}/submit
+Authorization: Bearer {{token}}
+Idempotency-Key: {{idempotencyKey}}
+
+### Accept offer
+POST {{baseUrl}}/api/applications/{{applicationId}}/offers/{{offerId}}/accept
+Authorization: Bearer {{token}}
+Idempotency-Key: accept-{{idempotencyKey}}
+
+### Decline offer
+POST {{baseUrl}}/api/applications/{{applicationId}}/offers/{{offerId}}/decline
+Authorization: Bearer {{token}}
+Idempotency-Key: decline-{{idempotencyKey}}
+
+### Withdraw application
+POST {{baseUrl}}/api/applications/{{applicationId}}/withdraw
+Authorization: Bearer {{token}}
+Idempotency-Key: withdraw-{{idempotencyKey}}
