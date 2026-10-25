@@ -41,7 +41,7 @@ client@demo.ru / password123
 | Risk score и факторы | ✅ | `Evaluation.risk_score`, `risk_details` |
 | 4 демо-заявки | ✅ | `app/platform/seed.py` |
 | Docker one-container | ✅ | `Dockerfile`, `docker-compose.yml` |
-| 17 backend-тестов | ✅ | `pytest` |
+| 18 backend-тестов | ✅ | `pytest` |
 | Идемпотентность | ✅ частично | submit / accept / decline |
 | Реальные ЕГРЮЛ / БКИ / антифрод | ❌ | checks замоканы в `CreditEngineClient` |
 | Подписание и выдача денег | ❌ | не входят в MVP |
@@ -157,6 +157,7 @@ SQLite хранится в volume `sqlite_data`, внутри контейнер
 ## Документация
 
 - [Архитектура](docs/architecture.md)
+- [Демо-кейсы клиентов](docs/demo-cases.md)
 - [FSM и статусы](docs/state-machine.md)
 - [Модель данных](docs/data-model.md)
 - [API](docs/api.md)
