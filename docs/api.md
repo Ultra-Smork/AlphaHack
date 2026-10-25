@@ -73,6 +73,17 @@ Authorization: Bearer <access_token>
 
 Карточка заявки: текущая revision, offers, evaluations, events.
 
+Каждая evaluation содержит `decision_stage` — этап, на котором остановилось
+решение:
+
+- `DATA` — не хватает данных;
+- `PRODUCT_ELIGIBILITY` — не выполнены условия продукта;
+- `RISK` — отказ по оценке риска или платёжеспособности;
+- `OFFER` — решение дошло до предложения.
+
+`decision_stage` нужен UI, чтобы не смешивать отказ по условиям продукта с
+отказом по риску.
+
 ### PATCH `/api/applications/{id}`
 
 ```json

@@ -23,7 +23,18 @@ import type {
 } from '@/lib/types'
 
 type FieldErrors = Partial<
-  Record<'amount' | 'term' | 'age' | 'revenue' | 'cash' | 'cv' | 'share' | 'consent', string>
+  Record<
+    | 'amount'
+    | 'term'
+    | 'age'
+    | 'revenue'
+    | 'cash'
+    | 'debt'
+    | 'cv'
+    | 'share'
+    | 'consent',
+    string
+  >
 >
 
 const MAX_AMOUNT = 1_000_000_000
@@ -45,6 +56,7 @@ export function ApplicationCreatePage() {
   const [companyAgeMonths, setCompanyAgeMonths] = useState('')
   const [monthlyRevenue, setMonthlyRevenue] = useState('')
   const [monthlyCash, setMonthlyCash] = useState('')
+  const [existingDebt, setExistingDebt] = useState('')
   const [revenueCv, setRevenueCv] = useState('')
   const [customerShare, setCustomerShare] = useState('')
   const [consent, setConsent] = useState(false)
@@ -72,6 +84,7 @@ export function ApplicationCreatePage() {
     const parsedAge = Number(companyAgeMonths)
     const parsedRevenue = monthlyRevenue ? Number(monthlyRevenue) : null
     const parsedCash = monthlyCash ? Number(monthlyCash) : null
+    const parsedDebt = existingDebt ? Number(existingDebt) : null
     const parsedCv = revenueCv ? Number(revenueCv) : null
     const parsedShare = customerShare ? Number(customerShare) : null
 
@@ -106,6 +119,12 @@ export function ApplicationCreatePage() {
       next.cash = 'Укажите корректную сумму'
     }
     if (
+      parsedDebt !== null &&
+      (!Number.isFinite(parsedDebt) || parsedDebt < 0)
+    ) {
+      next.debt = 'Долговая нагрузка не может быть отрицательной'
+    }
+    if (
       parsedCv !== null &&
       (!Number.isFinite(parsedCv) || parsedCv < 0 || parsedCv > 1)
     ) {
@@ -135,6 +154,7 @@ export function ApplicationCreatePage() {
 
     const parsedRevenue = monthlyRevenue ? Number(monthlyRevenue) : null
     const parsedCash = monthlyCash ? Number(monthlyCash) : null
+    const parsedDebt = existingDebt ? Number(existingDebt) : null
     const parsedCv = revenueCv ? Number(revenueCv) : null
     const parsedShare = customerShare ? Number(customerShare) : null
 
@@ -149,6 +169,7 @@ export function ApplicationCreatePage() {
         ...(parsedCash !== null
           ? { monthly_cash_available_for_debt_service_rub: parsedCash }
           : {}),
+        ...(parsedDebt !== null ? { existing_debt: parsedDebt } : {}),
         ...(parsedCv !== null ? { revenue_cv_12m: parsedCv } : {}),
         ...(parsedShare !== null
           ? { largest_customer_share: parsedShare }
@@ -395,6 +416,39 @@ export function ApplicationCreatePage() {
                       <p className="text-xs text-gray-500">
                         После операционных расходов и налогов. Если не знаете —
                         оставьте пустым, мы оценим по выручке.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="debt">
+                      Текущая долговая нагрузка в месяц
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="debt"
+                        type="number"
+                        min="0"
+                        step="1000"
+                        placeholder="Например, 200 000"
+                        value={existingDebt}
+                        aria-invalid={Boolean(fieldErrors.debt)}
+                        className={fieldClass(Boolean(fieldErrors.debt), true)}
+                        onChange={(event) => {
+                          setExistingDebt(event.target.value)
+                          clearFieldError('debt')
+                        }}
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
+                        ₽
+                      </span>
+                    </div>
+                    {fieldErrors.debt ? (
+                      <p className="text-xs text-red-600">{fieldErrors.debt}</p>
+                    ) : (
+                      <p className="text-xs text-gray-500">
+                        Платежи по действующим кредитам. Если их нет — оставьте
+                        пустым или укажите 0.
                       </p>
                     )}
                   </div>

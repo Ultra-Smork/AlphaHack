@@ -706,10 +706,38 @@ def _application_detail(session: Session, application: Application) -> Applicati
     detail.offer = offer_outputs[-1] if offer_outputs else None
     detail.offers = offer_outputs
     detail.evaluations = [
-        EvaluationOut.model_validate(evaluation) for evaluation in evaluations
+        _evaluation_out(evaluation) for evaluation in evaluations
     ]
     detail.events = [EventOut.model_validate(event) for event in events]
     return detail
+
+
+_PRODUCT_ELIGIBILITY_REASONS = {"PRODUCT_BUSINESS_AGE_REQUIREMENT"}
+
+
+def _evaluation_out(evaluation: Evaluation) -> EvaluationOut:
+    output = EvaluationOut.model_validate(evaluation)
+    output.decision_stage = _decision_stage(evaluation)
+    return output
+
+
+def _decision_stage(evaluation: Evaluation) -> str:
+    if evaluation.decision == "NEED_INFO" or evaluation.missing_fields:
+        return "DATA"
+
+    codes: set[str] = set()
+    for reason in evaluation.reason_codes or []:
+        code = reason.get("code") if isinstance(reason, dict) else reason
+        if isinstance(code, str):
+            codes.add(code)
+
+    if codes & _PRODUCT_ELIGIBILITY_REASONS:
+        return "PRODUCT_ELIGIBILITY"
+    if evaluation.decision == "DECLINED":
+        return "RISK"
+    if isinstance(evaluation.offer_data, dict) and evaluation.offer_data:
+        return "OFFER"
+    return "RISK"
 
 
 def _offer_out(

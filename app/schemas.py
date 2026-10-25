@@ -128,6 +128,9 @@ class EvaluationOut(BaseModel):
 
     id: int
     decision: str
+    decision_stage: Literal[
+        "DATA", "PRODUCT_ELIGIBILITY", "RISK", "OFFER"
+    ] | None = None
     risk_score: float
     risk_category: str | None
     reason_codes: list[ReasonOut | str]

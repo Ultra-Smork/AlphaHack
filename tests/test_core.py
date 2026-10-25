@@ -197,7 +197,53 @@ def test_missing_revenue_returns_needs_info_with_explanation():
         assert evaluation["risk_score"] == 0
         assert evaluation["risk_category"] is None
         assert evaluation["missing_fields"]
+        assert evaluation["decision_stage"] == "DATA"
         assert evaluation["reason_codes"][0]["code"] == "MISSING_REQUIRED_INFORMATION"
+
+
+def test_product_age_decline_reports_product_eligibility_stage():
+    cfg = Config(
+        app_env="test",
+        database_url="sqlite:///:memory:",
+        jwt_secret="test-secret-key-at-least-32-bytes",
+        ml_mode="engine",
+    )
+    database = db.open_db(cfg)
+    db.auto_migrate(database.engine)
+    app = create_app(cfg, database)
+    with TestClient(app) as test_client:
+        token = login(test_client, "client@demo.ru")
+        created = test_client.post(
+            "/api/applications",
+            headers=auth(token),
+            json={
+                "product_id": 1,
+                "data": {
+                    "amount": 400_000,
+                    "term_months": 12,
+                    "company_age_months": 5,
+                    "monthly_revenue": 150_000,
+                    "monthly_cash_available_for_debt_service_rub": 50_000,
+                    "existing_debt": 0,
+                    "revenue_cv_12m": 0.15,
+                    "largest_customer_share": 0.25,
+                    "credit_report_consent_valid": True,
+                },
+            },
+        )
+        assert created.status_code == 200
+        application_id = created.json()["data"]["id"]
+        submitted = test_client.post(
+            f"/api/applications/{application_id}/submit",
+            headers=auth(token),
+        )
+        assert submitted.status_code == 200
+        detail = submitted.json()["data"]
+        assert detail["status"] == "REJECTED"
+        evaluation = detail["evaluations"][-1]
+        assert evaluation["decision_stage"] == "PRODUCT_ELIGIBILITY"
+        assert evaluation["risk_category"] == "LOW"
+        assert evaluation["reason_codes"][0]["code"] == "PRODUCT_BUSINESS_AGE_REQUIREMENT"
 
 
 def test_submit_runs_through_credit_engine():

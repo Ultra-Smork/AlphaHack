@@ -98,6 +98,12 @@ export interface RiskFactor {
 export interface Evaluation {
   id: number
   decision: string
+  decision_stage?:
+    | 'DATA'
+    | 'PRODUCT_ELIGIBILITY'
+    | 'RISK'
+    | 'OFFER'
+    | null
   risk_score: number
   risk_category: string | null
   reason_codes: Array<ReasonCode | string>

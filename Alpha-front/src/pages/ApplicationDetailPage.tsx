@@ -109,10 +109,67 @@ const NEXT_ACTION_LABELS: Record<string, string> = {
   WAIT_FOR_REVIEW: 'Заявка ожидает дополнительной проверки.',
 }
 
+const POLICY_REASON_CODES = new Set(['PRODUCT_BUSINESS_AGE_REQUIREMENT'])
+
+const PRODUCT_ADJUSTMENT_REASONS = new Set([
+  'AMOUNT_LIMITED_BY_PRODUCT_OR_AFFORDABILITY',
+  'TERM_CHANGED_TO_PRODUCT_RANGE',
+])
+
+type DecisionStepState = 'passed' | 'failed' | 'skipped' | 'info'
+
+const DECISION_STEP_STYLES: Record<
+  DecisionStepState,
+  { Icon: LucideIcon; tone: string }
+> = {
+  passed: { Icon: CheckCircle2, tone: 'text-green-600' },
+  failed: { Icon: XCircle, tone: 'text-red-600' },
+  skipped: { Icon: Clock, tone: 'text-gray-400' },
+  info: { Icon: Info, tone: 'text-blue-600' },
+}
+
+function DecisionStep({
+  state,
+  title,
+  detail,
+}: {
+  state: DecisionStepState
+  title: string
+  detail: string
+}) {
+  const { Icon, tone } = DECISION_STEP_STYLES[state]
+  return (
+    <div className="flex items-start gap-3">
+      <Icon className={cn('mt-0.5 h-5 w-5 shrink-0', tone)} />
+      <div>
+        <p className="text-sm font-medium text-gray-900">{title}</p>
+        <p className="mt-0.5 text-sm text-gray-600">{detail}</p>
+      </div>
+    </div>
+  )
+}
+
+function formatRate(rate: number) {
+  return `${(rate * 100).toLocaleString('ru-RU', {
+    maximumFractionDigits: 2,
+  })}%`
+}
+
 type Action = 'submit' | 'withdraw' | 'accept' | 'decline'
 
 type EditFieldErrors = Partial<
-  Record<'amount' | 'term' | 'age' | 'revenue' | 'consent', string>
+  Record<
+    | 'amount'
+    | 'term'
+    | 'age'
+    | 'revenue'
+    | 'cash'
+    | 'debt'
+    | 'cv'
+    | 'share'
+    | 'consent',
+    string
+  >
 >
 
 function editFieldClass(hasError: boolean, withSuffix = false) {
@@ -326,6 +383,10 @@ export function ApplicationDetailPage() {
   const [editTerm, setEditTerm] = useState('')
   const [editAge, setEditAge] = useState('')
   const [editRevenue, setEditRevenue] = useState('')
+  const [editCash, setEditCash] = useState('')
+  const [editDebt, setEditDebt] = useState('')
+  const [editCv, setEditCv] = useState('')
+  const [editShare, setEditShare] = useState('')
   const [editPurpose, setEditPurpose] = useState('')
   const [editConsent, setEditConsent] = useState(false)
 
@@ -420,6 +481,28 @@ export function ApplicationDetailPage() {
         ? ''
         : String(data.monthly_revenue),
     )
+    setEditCash(
+      data.monthly_cash_available_for_debt_service_rub === null ||
+        data.monthly_cash_available_for_debt_service_rub === undefined
+        ? ''
+        : String(data.monthly_cash_available_for_debt_service_rub),
+    )
+    setEditDebt(
+      data.existing_debt === null || data.existing_debt === undefined
+        ? ''
+        : String(data.existing_debt),
+    )
+    setEditCv(
+      data.revenue_cv_12m === null || data.revenue_cv_12m === undefined
+        ? ''
+        : String(data.revenue_cv_12m),
+    )
+    setEditShare(
+      data.largest_customer_share === null ||
+        data.largest_customer_share === undefined
+        ? ''
+        : String(data.largest_customer_share),
+    )
     setEditPurpose(data.purpose ?? '')
     setEditConsent(Boolean(data.credit_report_consent_valid))
     setEditError(null)
@@ -437,6 +520,10 @@ export function ApplicationDetailPage() {
     const term = Number(editTerm)
     const age = Number(editAge)
     const revenue = editRevenue ? Number(editRevenue) : null
+    const cash = editCash ? Number(editCash) : null
+    const debt = editDebt ? Number(editDebt) : null
+    const cv = editCv ? Number(editCv) : null
+    const share = editShare ? Number(editShare) : null
 
     const nextErrors: EditFieldErrors = {}
     if (
@@ -455,6 +542,18 @@ export function ApplicationDetailPage() {
     if (revenue !== null && (!Number.isFinite(revenue) || revenue < 0)) {
       nextErrors.revenue = 'Выручка не может быть отрицательной'
     }
+    if (cash !== null && !Number.isFinite(cash)) {
+      nextErrors.cash = 'Укажите корректную сумму'
+    }
+    if (debt !== null && (!Number.isFinite(debt) || debt < 0)) {
+      nextErrors.debt = 'Долговая нагрузка не может быть отрицательной'
+    }
+    if (cv !== null && (!Number.isFinite(cv) || cv < 0 || cv > 1)) {
+      nextErrors.cv = 'Укажите значение от 0 до 1'
+    }
+    if (share !== null && (!Number.isFinite(share) || share < 0 || share > 1)) {
+      nextErrors.share = 'Укажите значение от 0 до 1'
+    }
     if (!editConsent) {
       nextErrors.consent = 'Требуется согласие'
     }
@@ -471,6 +570,12 @@ export function ApplicationDetailPage() {
         company_age_months: age,
         credit_report_consent_valid: editConsent,
         ...(revenue !== null ? { monthly_revenue: revenue } : {}),
+        ...(cash !== null
+          ? { monthly_cash_available_for_debt_service_rub: cash }
+          : {}),
+        ...(debt !== null ? { existing_debt: debt } : {}),
+        ...(cv !== null ? { revenue_cv_12m: cv } : {}),
+        ...(share !== null ? { largest_customer_share: share } : {}),
         ...(editPurpose.trim() ? { purpose: editPurpose.trim() } : {}),
       },
     }
@@ -585,13 +690,85 @@ export function ApplicationDetailPage() {
   const isProcessing = PROCESSING_STATUSES.has(application.status)
   const riskCategory = latestEvaluation?.risk_category?.toUpperCase()
   const hasRisk = Boolean(riskCategory)
-  const riskBoxClass =
-    application.status === 'REJECTED' || riskCategory === 'HIGH'
-      ? 'border-red-200 bg-red-50'
-      : riskCategory === 'LOW'
-        ? 'border-green-200 bg-green-50'
-        : 'border-yellow-200 bg-yellow-50'
   const riskFactors = latestEvaluation?.risk_details?.factors ?? []
+  const decisionStage = latestEvaluation?.decision_stage ?? null
+  const isPolicyRefusal =
+    decisionStage === 'PRODUCT_ELIGIBILITY' ||
+    (latestEvaluation?.reason_codes.some((reason) =>
+      POLICY_REASON_CODES.has(reasonCode(reason)),
+    ) ??
+      false)
+  const policyReason = latestEvaluation?.reason_codes.find((reason) =>
+    POLICY_REASON_CODES.has(reasonCode(reason)),
+  )
+  const policyDetails = policyReason ? reasonDetails(policyReason) : null
+  const productAdjustmentReason = latestEvaluation?.reason_codes.find(
+    (reason) => PRODUCT_ADJUSTMENT_REASONS.has(reasonCode(reason)),
+  )
+  const missingFields = latestEvaluation?.missing_fields ?? []
+  const riskLabel = riskCategory
+    ? RISK_BAND_LABELS[riskCategory] ?? riskCategory
+    : null
+  const rateLabel = latestOffer ? `${formatRate(latestOffer.rate)} годовых` : null
+  const offerDetail =
+    latestOffer && rateLabel
+      ? `${formatMoney(latestOffer.amount)} · ${rateLabel} · ${formatMoney(
+          latestOffer.payment,
+          { cents: true },
+        )}/мес`
+      : null
+
+  const dataStepState: DecisionStepState = missingFields.length
+    ? 'failed'
+    : 'passed'
+  const dataStepDetail = missingFields.length
+    ? `Не хватает: ${missingFields
+        .map((field) => MISSING_FIELD_LABELS[field] ?? field)
+        .join(', ')}.`
+    : 'Все обязательные сведения заполнены.'
+
+  const productStepState: DecisionStepState = isPolicyRefusal
+    ? 'failed'
+    : productAdjustmentReason
+      ? 'info'
+      : decisionStage === 'DATA'
+        ? 'skipped'
+        : 'passed'
+  const productStepDetail = isPolicyRefusal
+    ? policyDetails?.title && policyDetails.current
+      ? `${policyDetails.title}: ${policyDetails.current}. ${
+          policyDetails.limit ?? ''
+        }`.trim()
+      : 'Не выполнены формальные требования продукта.'
+    : productAdjustmentReason
+      ? reasonText(productAdjustmentReason)
+      : decisionStage === 'DATA'
+        ? 'Не проверялись: сначала нужны данные.'
+        : 'Продукт и параметры заявки допустимы.'
+
+  const riskStepState: DecisionStepState = !hasRisk
+    ? 'skipped'
+    : isPolicyRefusal
+      ? 'info'
+      : decisionStage === 'RISK'
+        ? 'failed'
+        : 'passed'
+  const riskStepDetail = hasRisk
+    ? `${Math.round(
+        latestEvaluation?.risk_score ?? 0,
+      )} из 100 — ${(riskLabel ?? '').toLowerCase()}${
+        isPolicyRefusal ? '. Справочно: на отказ не повлияла.' : '.'
+      }`
+    : '0 из 100 — недостаточно данных для расчёта.'
+
+  const offerStepState: DecisionStepState = latestOffer ? 'passed' : 'skipped'
+  const offerStepDetail = offerDetail
+    ? offerDetail
+    : isPolicyRefusal
+      ? 'Не сформирован: заявка остановлена на условиях продукта.'
+      : decisionStage === 'DATA'
+        ? 'Не сформирован: не хватает данных.'
+        : 'Не сформирован: банк не нашёл доступных условий.'
 
   return (
     <div className="space-y-6">
@@ -647,6 +824,82 @@ export function ApplicationDetailPage() {
       ) : null}
 
       <ApplicationStepper status={application.status} />
+
+      {REFUSAL_STATUSES.has(application.status) ? (
+        <div
+          className="rounded-lg border-2 border-red-300 bg-red-50 p-5"
+          role="alert"
+        >
+          <div className="flex items-start gap-3">
+            <XCircle className="mt-0.5 h-6 w-6 shrink-0 text-red-600" />
+            <div>
+              <p className="text-base font-semibold text-red-900">
+                {application.status === 'REJECTED'
+                  ? isPolicyRefusal
+                    ? 'Заявка не прошла проверку условий продукта'
+                    : 'Заявка не одобрена'
+                  : application.status === 'OFFER_DECLINED'
+                    ? 'Вы отклонили предложение'
+                    : 'Срок предложения истёк'}
+              </p>
+              {application.status === 'REJECTED' && isPolicyRefusal ? (
+                <p className="mt-1 text-sm text-red-800">
+                  Это не отказ по оценке риска. Заявка остановлена формальным
+                  требованием продукта.
+                </p>
+              ) : null}
+            </div>
+          </div>
+
+          {application.status === 'REJECTED' ? (
+            latestEvaluation?.reason_codes.length ? (
+              <div className="mt-4 space-y-3">
+                {latestEvaluation.reason_codes.map((reason, index) => {
+                  const details = reasonDetails(reason)
+                  return (
+                    <div
+                      key={`${reasonCode(reason)}-${index}`}
+                      className="rounded-md border border-red-100 bg-white p-4"
+                    >
+                      <p className="text-sm font-semibold text-red-900">
+                        {reasonText(reason)}
+                      </p>
+                      {details?.title && details.current ? (
+                        <p className="mt-2 text-sm text-gray-800">
+                          {details.title}:{' '}
+                          <span className="font-medium">
+                            {details.current}
+                          </span>
+                        </p>
+                      ) : null}
+                      {details?.limit ? (
+                        <p className="text-sm text-gray-600">
+                          {details.limit}
+                        </p>
+                      ) : null}
+                      {details?.action ? (
+                        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
+                          Что сделать: {details.action}
+                        </p>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-red-800">
+                Причина не указана. Попробуйте изменить параметры заявки.
+              </p>
+            )
+          ) : (
+            <p className="mt-3 text-sm text-red-800">
+              {application.status === 'OFFER_DECLINED'
+                ? 'Предложение отклонено. Вы можете подать новую заявку с другими параметрами.'
+                : 'Срок действия предложения истёк. Подайте заявку снова, чтобы получить актуальные условия.'}
+            </p>
+          )}
+        </div>
+      ) : null}
 
       {isProcessing ? (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
@@ -713,7 +966,7 @@ export function ApplicationDetailPage() {
               <div>
                 <p className="text-gray-500">Ставка</p>
                 <p className="mt-1 font-medium text-gray-900">
-                  {latestOffer.rate}% годовых
+                  {rateLabel}
                 </p>
               </div>
               <div>
@@ -740,7 +993,7 @@ export function ApplicationDetailPage() {
             {application.status === 'OFFER_ACCEPTED' ? (
               <div className="mt-4 rounded-md border border-green-200 bg-green-50 p-3">
                 <p className="text-sm font-medium text-green-800">
-                  ✓ Предложение принято. Деньги будут зачислены.
+                  ✓ Предложение принято. Банк свяжется с вами для оформления.
                 </p>
               </div>
             ) : null}
@@ -751,48 +1004,44 @@ export function ApplicationDetailPage() {
       {latestEvaluation ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Оценка риска</CardTitle>
+            <CardTitle className="text-lg">Как принималось решение</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`rounded-md border p-4 ${riskBoxClass}`}>
-              {hasRisk ? (
-                <div>
-                  <p className="text-sm text-gray-600">Оценка риска</p>
-                  <p className="mt-1 text-2xl font-bold text-gray-900">
-                    {RISK_BAND_LABELS[riskCategory ?? ''] ?? riskCategory}
-                  </p>
-                  <p className="mt-1 text-sm text-gray-700">
-                    {Math.round(latestEvaluation.risk_score)} из 100 — чем выше,
-                    тем лучше
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <p className="text-sm text-gray-600">Оценка риска</p>
-                  <p className="mt-1 text-2xl font-bold text-gray-900">
-                    0 из 100
-                  </p>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Недостаточно данных для расчёта. Добавьте сведения, чтобы
-                    нейросеть оценила риск.
-                  </p>
-                </div>
-              )}
+            <div className="space-y-4">
+              <DecisionStep
+                state={dataStepState}
+                title="Данные заявки"
+                detail={dataStepDetail}
+              />
+              <DecisionStep
+                state={productStepState}
+                title="Условия продукта"
+                detail={productStepDetail}
+              />
+              <DecisionStep
+                state={riskStepState}
+                title="Оценка риска"
+                detail={riskStepDetail}
+              />
+              <DecisionStep
+                state={offerStepState}
+                title="Предложение"
+                detail={offerStepDetail}
+              />
             </div>
 
             {hasRisk ? (
-              <p className="mt-3 text-xs text-gray-500">
-                Это не вероятность одобрения. Балл показывает, насколько заявка
-                устойчива по возрасту бизнеса, денежному потоку, выручке и
-                долговой нагрузке. Итоговое решение также зависит от суммы,
-                срока и платёжеспособности.
+              <p className="mt-4 text-xs text-gray-500">
+                Оценка риска — это не вероятность одобрения. Балл показывает
+                устойчивость заявки по возрасту бизнеса, денежному потоку,
+                выручке и долговой нагрузке.
               </p>
             ) : null}
 
             {riskFactors.length > 0 ? (
               <div className="mt-4">
                 <p className="text-sm font-medium text-gray-900">
-                  Факторы, повлиявшие на решение
+                  Факторы оценки риска
                 </p>
                 <ul className="mt-2 space-y-2">
                   {riskFactors.map((factor) => (
@@ -847,17 +1096,6 @@ export function ApplicationDetailPage() {
                     )
                   })}
                 </div>
-              </div>
-            ) : null}
-
-            {latestEvaluation.missing_fields?.length ? (
-              <div className="mt-4 rounded-md bg-yellow-50 p-3 text-sm text-yellow-800">
-                <p className="font-medium">Что нужно добавить:</p>
-                <ul className="mt-1 list-inside list-disc">
-                  {latestEvaluation.missing_fields.map((field) => (
-                    <li key={field}>{MISSING_FIELD_LABELS[field] ?? field}</li>
-                  ))}
-                </ul>
               </div>
             ) : null}
 
@@ -978,53 +1216,6 @@ export function ApplicationDetailPage() {
           </div>
         ) : null}
 
-        {REFUSAL_STATUSES.has(application.status) ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-medium text-red-800">
-              Заявка не одобрена.
-            </p>
-            {latestEvaluation?.reason_codes.length ? (
-              <div className="mt-3 space-y-3">
-                {latestEvaluation.reason_codes.map((reason, index) => {
-                  const details = reasonDetails(reason)
-                  return (
-                    <div
-                      key={`${reasonCode(reason)}-${index}`}
-                      className="rounded-md bg-white/70 p-3 text-sm text-gray-700"
-                    >
-                      <p className="font-medium text-red-800">
-                        {reasonText(reason)}
-                      </p>
-                      {details?.title && details.current ? (
-                        <p className="mt-1">
-                          {details.title}: {details.current}
-                        </p>
-                      ) : null}
-                      {details?.limit ? (
-                        <p className="text-xs text-gray-600">
-                          {details.limit}
-                        </p>
-                      ) : null}
-                      {details?.action ? (
-                        <p className="mt-1 text-xs font-medium text-red-700">
-                          Что сделать: {details.action}
-                        </p>
-                      ) : null}
-                      <p className="mt-1 text-xs text-gray-400">
-                        {reasonCode(reason)}
-                      </p>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <p className="mt-1 text-sm text-red-700">
-                Причина не указана. Попробуйте изменить параметры заявки.
-              </p>
-            )}
-          </div>
-        ) : null}
-
         {application.status === 'WITHDRAWN' ||
         application.status === 'CANCELLED' ? (
           <div className="rounded-lg border border-gray-200 bg-gray-100 p-4">
@@ -1069,7 +1260,7 @@ export function ApplicationDetailPage() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <form onSubmit={handleEditSubmit}>
             <DialogHeader>
               <DialogTitle>Дополнить данные</DialogTitle>
@@ -1198,6 +1389,127 @@ export function ApplicationDetailPage() {
                     Необязательно. Средняя выручка за месяц.
                   </p>
                 )}
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-cash">Доступно на долг в месяц</Label>
+                  <div className="relative">
+                    <Input
+                      id="edit-cash"
+                      type="number"
+                      step="1000"
+                      placeholder="Например, 400 000"
+                      value={editCash}
+                      aria-invalid={Boolean(editFieldErrors.cash)}
+                      className={editFieldClass(
+                        Boolean(editFieldErrors.cash),
+                        true,
+                      )}
+                      onChange={(event) => {
+                        setEditCash(event.target.value)
+                        clearEditFieldError('cash')
+                      }}
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
+                      ₽
+                    </span>
+                  </div>
+                  {editFieldErrors.cash ? (
+                    <p className="text-xs text-red-600">
+                      {editFieldErrors.cash}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      После расходов и налогов.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-debt">Текущий долг в месяц</Label>
+                  <div className="relative">
+                    <Input
+                      id="edit-debt"
+                      type="number"
+                      min="0"
+                      step="1000"
+                      placeholder="Например, 200 000"
+                      value={editDebt}
+                      aria-invalid={Boolean(editFieldErrors.debt)}
+                      className={editFieldClass(
+                        Boolean(editFieldErrors.debt),
+                        true,
+                      )}
+                      onChange={(event) => {
+                        setEditDebt(event.target.value)
+                        clearEditFieldError('debt')
+                      }}
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
+                      ₽
+                    </span>
+                  </div>
+                  {editFieldErrors.debt ? (
+                    <p className="text-xs text-red-600">
+                      {editFieldErrors.debt}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Платежи по действующим кредитам.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-cv">Вариация выручки, 0–1</Label>
+                  <Input
+                    id="edit-cv"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    placeholder="0.15"
+                    value={editCv}
+                    aria-invalid={Boolean(editFieldErrors.cv)}
+                    className={editFieldClass(Boolean(editFieldErrors.cv))}
+                    onChange={(event) => {
+                      setEditCv(event.target.value)
+                      clearEditFieldError('cv')
+                    }}
+                  />
+                  {editFieldErrors.cv ? (
+                    <p className="text-xs text-red-600">{editFieldErrors.cv}</p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Нестабильность выручки.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-share">Доля клиента, 0–1</Label>
+                  <Input
+                    id="edit-share"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    placeholder="0.25"
+                    value={editShare}
+                    aria-invalid={Boolean(editFieldErrors.share)}
+                    className={editFieldClass(Boolean(editFieldErrors.share))}
+                    onChange={(event) => {
+                      setEditShare(event.target.value)
+                      clearEditFieldError('share')
+                    }}
+                  />
+                  {editFieldErrors.share ? (
+                    <p className="text-xs text-red-600">
+                      {editFieldErrors.share}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Концентрация на одном клиенте.
+                    </p>
+                  )}
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-purpose">Цель</Label>
