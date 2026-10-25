@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from '@/hooks/use-toast'
 import { api, getApiErrorMessage } from '@/lib/api'
+import { parseNumericInput } from '@/lib/numberInput'
 import { cn } from '@/lib/utils'
 import type {
   ApplicationDetail,
@@ -79,17 +80,17 @@ export function ApplicationCreatePage() {
 
   function validate(): FieldErrors {
     const next: FieldErrors = {}
-    const parsedAmount = Number(amount)
+    const parsedAmount = parseNumericInput(amount)
     const parsedTerm = Number(termMonths)
     const parsedAge = Number(companyAgeMonths)
-    const parsedRevenue = monthlyRevenue ? Number(monthlyRevenue) : null
-    const parsedCash = monthlyCash ? Number(monthlyCash) : null
-    const parsedDebt = existingDebt ? Number(existingDebt) : null
+    const parsedRevenue = parseNumericInput(monthlyRevenue)
+    const parsedCash = parseNumericInput(monthlyCash)
+    const parsedDebt = parseNumericInput(existingDebt)
     const parsedCv = revenueCv ? Number(revenueCv) : null
     const parsedShare = customerShare ? Number(customerShare) : null
 
     if (
-      !Number.isFinite(parsedAmount) ||
+      parsedAmount === null ||
       !Number.isInteger(parsedAmount) ||
       parsedAmount < 1 ||
       parsedAmount > MAX_AMOUNT
@@ -113,20 +114,14 @@ export function ApplicationCreatePage() {
     ) {
       next.age = 'Возраст бизнеса должен быть целым числом от 0 до 1200 месяцев'
     }
-    if (
-      parsedRevenue !== null &&
-      (!Number.isFinite(parsedRevenue) || parsedRevenue < 0)
-    ) {
-      next.revenue = 'Выручка не может быть отрицательной'
+    if (monthlyRevenue.trim() !== '' && parsedRevenue === null) {
+      next.revenue = 'Выручка должна быть неотрицательным числом'
     }
-    if (parsedCash !== null && !Number.isFinite(parsedCash)) {
+    if (monthlyCash.trim() !== '' && parsedCash === null) {
       next.cash = 'Укажите корректную сумму'
     }
-    if (
-      parsedDebt !== null &&
-      (!Number.isFinite(parsedDebt) || parsedDebt < 0)
-    ) {
-      next.debt = 'Долговая нагрузка не может быть отрицательной'
+    if (existingDebt.trim() !== '' && parsedDebt === null) {
+      next.debt = 'Долговая нагрузка должна быть неотрицательным числом'
     }
     if (
       parsedCv !== null &&
@@ -156,24 +151,29 @@ export function ApplicationCreatePage() {
       return
     }
 
-    const parsedRevenue = monthlyRevenue ? Number(monthlyRevenue) : null
-    const parsedCash = monthlyCash ? Number(monthlyCash) : null
-    const parsedDebt = existingDebt ? Number(existingDebt) : null
+    const amountValue = parseNumericInput(amount)
+    const revenueValue = parseNumericInput(monthlyRevenue)
+    const cashValue = parseNumericInput(monthlyCash)
+    const debtValue = parseNumericInput(existingDebt)
     const parsedCv = revenueCv ? Number(revenueCv) : null
     const parsedShare = customerShare ? Number(customerShare) : null
+
+    if (amountValue === null) {
+      return
+    }
 
     const payload: CreateApplicationInput = {
       product_id: productId,
       data: {
-        amount: Number(amount),
+        amount: amountValue,
         term_months: Number(termMonths),
         company_age_months: Number(companyAgeMonths),
         credit_report_consent_valid: consent,
-        ...(parsedRevenue !== null ? { monthly_revenue: parsedRevenue } : {}),
-        ...(parsedCash !== null
-          ? { monthly_cash_available_for_debt_service_rub: parsedCash }
+        ...(revenueValue !== null ? { monthly_revenue: revenueValue } : {}),
+        ...(cashValue !== null
+          ? { monthly_cash_available_for_debt_service_rub: cashValue }
           : {}),
-        ...(parsedDebt !== null ? { existing_debt: parsedDebt } : {}),
+        ...(debtValue !== null ? { existing_debt: debtValue } : {}),
         ...(parsedCv !== null ? { revenue_cv_12m: parsedCv } : {}),
         ...(parsedShare !== null
           ? { largest_customer_share: parsedShare }
@@ -241,11 +241,11 @@ export function ApplicationCreatePage() {
               <div className="relative">
                 <Input
                   id="amount"
-                  type="number"
-                  min="1"
-                  max={MAX_AMOUNT}
-                  step="1"
-                  placeholder="Например, 1 000 000"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={20}
+                  placeholder="Например, 5 000 000"
                   value={amount}
                   aria-invalid={Boolean(fieldErrors.amount)}
                   className={fieldClass(Boolean(fieldErrors.amount), true)}
@@ -263,7 +263,8 @@ export function ApplicationCreatePage() {
                 <p className="text-xs text-red-600">{fieldErrors.amount}</p>
               ) : (
                 <p className="text-xs text-gray-500">
-                  Сумма кредита в рублях. До 1 000 000 000 ₽.
+                  Сумма кредита в рублях. До 1 000 000 000 ₽. Можно вводить с
+                  пробелами: 5 000 000.
                 </p>
               )}
             </div>
@@ -327,9 +328,10 @@ export function ApplicationCreatePage() {
               <div className="relative">
                 <Input
                   id="revenue"
-                  type="number"
-                  min="0"
-                  step="1000"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  maxLength={20}
                   placeholder="Например, 500 000"
                   value={monthlyRevenue}
                   aria-invalid={Boolean(fieldErrors.revenue)}
@@ -399,8 +401,10 @@ export function ApplicationCreatePage() {
                     <div className="relative">
                       <Input
                         id="cash"
-                        type="number"
-                        step="1000"
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        maxLength={20}
                         placeholder="Например, 400 000"
                         value={monthlyCash}
                         aria-invalid={Boolean(fieldErrors.cash)}
@@ -431,9 +435,10 @@ export function ApplicationCreatePage() {
                     <div className="relative">
                       <Input
                         id="debt"
-                        type="number"
-                        min="0"
-                        step="1000"
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        maxLength={20}
                         placeholder="Например, 200 000"
                         value={existingDebt}
                         aria-invalid={Boolean(fieldErrors.debt)}

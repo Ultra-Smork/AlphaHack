@@ -38,6 +38,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/hooks/use-toast'
 import { api, apiMutation, getApiErrorMessage } from '@/lib/api'
+import { parseNumericInput } from '@/lib/numberInput'
 import {
   formatDate,
   formatMoney,
@@ -516,18 +517,18 @@ export function ApplicationDetailPage() {
       return
     }
 
-    const amount = Number(editAmount)
+    const amount = parseNumericInput(editAmount)
     const term = Number(editTerm)
     const age = Number(editAge)
-    const revenue = editRevenue ? Number(editRevenue) : null
-    const cash = editCash ? Number(editCash) : null
-    const debt = editDebt ? Number(editDebt) : null
+    const revenue = parseNumericInput(editRevenue)
+    const cash = parseNumericInput(editCash)
+    const debt = parseNumericInput(editDebt)
     const cv = editCv ? Number(editCv) : null
     const share = editShare ? Number(editShare) : null
 
     const nextErrors: EditFieldErrors = {}
     if (
-      !Number.isFinite(amount) ||
+      amount === null ||
       !Number.isInteger(amount) ||
       amount < 1 ||
       amount > 1_000_000_000
@@ -551,14 +552,14 @@ export function ApplicationDetailPage() {
     ) {
       nextErrors.age = 'Возраст бизнеса должен быть целым числом от 0 до 1200 месяцев'
     }
-    if (revenue !== null && (!Number.isFinite(revenue) || revenue < 0)) {
-      nextErrors.revenue = 'Выручка не может быть отрицательной'
+    if (editRevenue.trim() !== '' && revenue === null) {
+      nextErrors.revenue = 'Выручка должна быть неотрицательным числом'
     }
-    if (cash !== null && !Number.isFinite(cash)) {
+    if (editCash.trim() !== '' && cash === null) {
       nextErrors.cash = 'Укажите корректную сумму'
     }
-    if (debt !== null && (!Number.isFinite(debt) || debt < 0)) {
-      nextErrors.debt = 'Долговая нагрузка не может быть отрицательной'
+    if (editDebt.trim() !== '' && debt === null) {
+      nextErrors.debt = 'Долговая нагрузка должна быть неотрицательным числом'
     }
     if (cv !== null && (!Number.isFinite(cv) || cv < 0 || cv > 1)) {
       nextErrors.cv = 'Укажите значение от 0 до 1'
@@ -571,6 +572,9 @@ export function ApplicationDetailPage() {
     }
     setEditFieldErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) {
+      return
+    }
+    if (amount === null) {
       return
     }
 
@@ -1312,11 +1316,11 @@ export function ApplicationDetailPage() {
                 <div className="relative">
                   <Input
                     id="edit-amount"
-                    type="number"
-                    min="1"
-                    max="1000000000"
-                    step="1"
-                    placeholder="Например, 1 000 000"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={20}
+                    placeholder="Например, 5 000 000"
                     value={editAmount}
                     aria-invalid={Boolean(editFieldErrors.amount)}
                     className={editFieldClass(
@@ -1339,7 +1343,7 @@ export function ApplicationDetailPage() {
                   </p>
                 ) : (
                   <p className="text-xs text-gray-500">
-                    До 1 000 000 000 ₽.
+                    До 1 000 000 000 ₽. Можно вводить с пробелами: 5 000 000.
                   </p>
                 )}
               </div>
@@ -1398,9 +1402,10 @@ export function ApplicationDetailPage() {
                 <div className="relative">
                   <Input
                     id="edit-revenue"
-                    type="number"
-                    min="0"
-                    step="1000"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    maxLength={20}
                     placeholder="Например, 500 000"
                     value={editRevenue}
                     aria-invalid={Boolean(editFieldErrors.revenue)}
@@ -1433,8 +1438,10 @@ export function ApplicationDetailPage() {
                   <div className="relative">
                     <Input
                       id="edit-cash"
-                      type="number"
-                      step="1000"
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      maxLength={20}
                       placeholder="Например, 400 000"
                       value={editCash}
                       aria-invalid={Boolean(editFieldErrors.cash)}
@@ -1466,9 +1473,10 @@ export function ApplicationDetailPage() {
                   <div className="relative">
                     <Input
                       id="edit-debt"
-                      type="number"
-                      min="0"
-                      step="1000"
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      maxLength={20}
                       placeholder="Например, 200 000"
                       value={editDebt}
                       aria-invalid={Boolean(editFieldErrors.debt)}
