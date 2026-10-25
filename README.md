@@ -1,26 +1,118 @@
 # Суирники3
 
-B2C-кредитный симулятор для предпринимателей. Клиент заполняет заявку, локальный кредитный движок оценивает бизнес и выдаёт финальное решение: одобрение, counteroffer, запрос данных или отказ.
+B2C-кредитный симулятор для предпринимателей: заявка, оценка локального credit engine и финальное решение — оффер, отказ или запрос данных.
 
-Ручного рассмотрения, подписания договора и выдачи денег нет. `OFFER_ACCEPTED` — финальный статус.
+Ручного рассмотрения, подписания договора и выдачи денег нет.
+
+[Видео-демо: TODO — вставить ссылку]
+
+## Скриншоты
+
+TODO: добавить 2–3 изображения.
+
+- `TODO: скриншот списка заявок`
+- `TODO: скриншот карточки заявки с оффером`
+- `TODO: скриншот формы создания`
+
+## Проверка за 30 секунд
+
+```bash
+docker compose up --build
+```
+
+Открыть http://localhost:8000
+
+```text
+client@demo.ru / password123
+```
+
+## Соответствие ТЗ
+
+| Требование | Статус | Где реализовано |
+|---|---|---|
+| B2C без банков и ручного review | ✅ | `ApplicationStatus`, `credit_engine` с `staff_review=False` |
+| Email + JWT auth | ✅ | `/api/auth/login`, `AuthContext` |
+| FSM из 13 статусов | ✅ | `app/services/application_service.py` |
+| Локальный credit engine | ✅ | `app/platform/ai/credit_engine.py` |
+| 2 кредитных продукта | ✅ | `working_capital`, `equipment` |
+| Product-политика и лимиты | ✅ | `POLICY` внутри engine |
+| Оффер: accept / decline / withdraw | ✅ | `/accept`, `/decline`, `/withdraw` |
+| Объяснение отказа и лимитов | ✅ | `reason_codes.details`, UI-плашки |
+| Risk score и факторы | ✅ | `Evaluation.risk_score`, `risk_details` |
+| 4 демо-заявки | ✅ | `app/platform/seed.py` |
+| Docker one-container | ✅ | `Dockerfile`, `docker-compose.yml` |
+| 16 backend-тестов | ✅ | `pytest` |
+| Идемпотентность | ✅ частично | submit / accept / decline |
+| Реальные ЕГРЮЛ / БКИ / антифрод | ❌ | checks замоканы в `CreditEngineClient` |
+| Подписание и выдача денег | ❌ | не входят в MVP |
+
+## Что реализовано в MVP
+
+- ✅ Регистрация/вход по email и паролю.
+- ✅ JWT на 24 часа.
+- ✅ Создание, редактирование и подача заявки.
+- ✅ FSM: `DRAFT` -> `SUBMITTED` -> `INTAKE_CHECK` -> `ENRICHMENT` -> `SCORING`.
+- ✅ Локальный credit engine без HTTP-сервиса.
+- ✅ `APPROVED`, `COUNTEROFFER`, `NEED_INFO`, `DECLINED`.
+- ✅ Оффер с суммой, сроком, ставкой, платежом и DSCR.
+- ✅ Принятие и отклонение оффера.
+- ✅ Отзыв заявки.
+- ✅ Объяснение причин отказа и изменения условий.
+- ✅ Risk score 0..100, LOW/MEDIUM/HIGH.
+- ✅ 4 demo-заявки разных статусов.
+- ✅ Docker: frontend + backend в одном контейнере.
+- ❌ Manual review.
+- ❌ Подписание договора.
+- ❌ Выдача денег.
+- ❌ Реальные внешние проверки.
+
+## Как это работает
+
+```text
+DRAFT
+  -> SUBMITTED
+  -> INTAKE_CHECK
+  -> ENRICHMENT
+  -> SCORING
+  -> OFFER_MADE | NEEDS_INFO | REJECTED
+  -> OFFER_ACCEPTED | OFFER_DECLINED | OFFER_EXPIRED
+```
+
+`SCORING` вызывает локальный `credit_engine`:
+
+- `APPROVED` -> `OFFER_MADE`;
+- `COUNTEROFFER` -> `OFFER_MADE` с изменёнными условиями;
+- `NEED_INFO` -> `NEEDS_INFO`;
+- `DECLINED` -> `REJECTED`.
+
+`MANUAL_REVIEW` при `staff_review=False` не используется. Если движок всё же вернёт его, backend логирует ошибку и безопасно переводит заявку в `REJECTED`.
+
+### Продукты
+
+| ID | Продукт | Сумма | Срок | Возраст бизнеса | Margin |
+|---|---|---|---|---|---|
+| 1 | Оборотные средства | 100 000–3 000 000 ₽ | 6–24 мес | от 12 мес | +4 п.п. |
+| 2 | Оборудование | 300 000–5 000 000 ₽ | 12–36 мес | от 24 мес | +2 п.п. |
+
+UI не блокирует нестандартные значения. Engine — источник истины: он делает counteroffer или decline.
+
+### Risk score
+
+`risk score` — это балл 0..100, а не вероятность одобрения.
+
+- 75–100 — низкий риск;
+- 50–74 — средний риск;
+- 0–49 — высокий риск;
+- выше — лучше.
+
+`calibrated_pd` всегда `null`: модель не обучена на реальных исходах.
 
 ## Стек
 
 - Backend: FastAPI, SQLAlchemy, SQLite, Pydantic v2, PyJWT.
 - Frontend: React 19, TypeScript, Vite, Tailwind CSS v3, shadcn/ui, axios.
-- Кредитное ядро: локальный Python-движок `app/platform/ai/credit_engine.py`.
-- Docker: Python 3.12 + собранный frontend в одном контейнере.
-
-## Как это работает
-
-1. Пользователь логинится по email и паролю.
-2. Создаёт черновик заявки.
-3. Подаёт заявку.
-4. Backend синхронно прогоняет FSM:
-   `DRAFT -> SUBMITTED -> INTAKE_CHECK -> ENRICHMENT -> SCORING`.
-5. `credit_engine` возвращает решение.
-6. Backend сохраняет `Evaluation`, `Offer`, `ApplicationEvent` и обновляет статус.
-7. Пользователь принимает или отклоняет оффер.
+- Credit engine: локальный Python-модуль.
+- Docker: Python 3.12 + собранный frontend в одном образе.
 
 ## Запуск локально
 
@@ -33,11 +125,19 @@ make dev
 - Backend: http://localhost:8000
 - Swagger: http://localhost:8000/docs
 
-`make dev` запускает оба процесса и останавливает их по `Ctrl+C`.
+Проверка:
+
+```bash
+make check
+```
+
+Сброс локальной БД:
+
+```bash
+make reset-db
+```
 
 ## Docker
-
-Один контейнер: frontend собирается Node-стадией, backend работает на Python 3.12 и отдаёт SPA с того же порта.
 
 ```bash
 docker compose up --build
@@ -54,20 +154,6 @@ docker compose up --build
 
 SQLite хранится в volume `sqlite_data`, внутри контейнера: `/app/data/alphahack.db`.
 
-## Проверка
-
-```bash
-make check
-```
-
-Запускает:
-
-- backend `pytest`;
-- frontend `lint`;
-- frontend `build`.
-
-Текущий результат: **16 backend tests passed**, frontend lint/build clean.
-
 ## Демо-аккаунт
 
 ```text
@@ -78,82 +164,37 @@ client@demo.ru / password123
 
 1. Войти под `client@demo.ru`.
 2. Открыть **#4** — финальный `OFFER_ACCEPTED`.
-3. Открыть **#3** — `OFFER_MADE`, counteroffer: движок снизил сумму.
+3. Открыть **#3** — `OFFER_MADE`, counteroffer.
 4. Открыть **#2** — `NEEDS_INFO`, показать недостающие поля.
 5. Открыть **#1** — `REJECTED`, показать risk score и причины.
 6. Создать новую заявку — показать форму.
-7. Подать заявку — показать обработку и результат.
+7. Подать заявку — показать обработку.
 8. Вернуться к списку — показать статистику и фильтры.
 
-## Демо-данные
+### Демо-заявки
 
-Seed создаёт четыре заявки:
-
-- `#1` — `REJECTED`, 1 000 000 ₽, 24 мес, high risk 25/100.
+- `#1` — `REJECTED`, 1 000 000 ₽, 24 мес, risk 25/100 HIGH.
 - `#2` — `NEEDS_INFO`, 1 000 000 ₽, 24 мес, не хватает финансовых данных.
-- `#3` — `OFFER_MADE`, запрошено 5 000 000 ₽, engine дал counteroffer:
-  1 630 000 ₽, 24 мес, 23%, платёж 85 368.49 ₽, DSCR 1.300182.
+- `#3` — `OFFER_MADE`, запрошено 5 000 000 ₽, counteroffer 1 630 000 ₽,
+  24 мес, 23%, платёж 85 368.49 ₽, DSCR 1.300182.
 - `#4` — `OFFER_ACCEPTED`, 1 000 000 ₽, 24 мес, 24%,
   платёж 52 871.10 ₽, DSCR 3.888361.
 
-Список сортируется по `id DESC`, поэтому сверху видны `#4`, `#3`, `#2`, `#1`.
+Список сортируется по `id DESC`: `#4`, `#3`, `#2`, `#1`.
 
-Seed идемпотентный. Если движок недоступен, seed создаёт только пользователя и DRAFT.
+Seed идемпотентный. Если engine недоступен, создаются только пользователь и DRAFT.
 
-Полный сброс локальной БД:
+## Ограничения MVP
 
-```bash
-make reset-db
-```
-
-`DROP_ON_START=true` удаляет таблицы при старте. Использовать только для очистки.
-
-## Продукты
-
-| ID | Продукт | Сумма | Срок | Возраст бизнеса | Margin |
-|---|---|---|---|---|---|
-| 1 | Оборотные средства | 100 000–3 000 000 ₽ | 6–24 мес | от 12 мес | +4 п.п. |
-| 2 | Оборудование | 300 000–5 000 000 ₽ | 12–36 мес | от 24 мес | +2 п.п. |
-
-Engine-политика — источник истины. UI не блокирует нестандартные значения; engine сам решает:
-
-- `APPROVED` -> `OFFER_MADE`;
-- `COUNTEROFFER` -> `OFFER_MADE`;
-- `NEED_INFO` -> `NEEDS_INFO`;
-- `DECLINED` -> `REJECTED`.
-
-## Risk score
-
-`risk score` — это балл **0..100**, а не вероятность одобрения.
-
-- 75–100 — низкий риск;
-- 50–74 — средний риск;
-- 0–49 — высокий риск;
-- выше — лучше.
-
-На решение также влияют продукт, сумма, срок, DSCR, денежный поток, проверки и долговая нагрузка. `calibrated_pd` в demo-движке всегда `null`.
-
-## Статусы
-
-```text
-DRAFT
-SUBMITTED
-INTAKE_CHECK
-NEEDS_INFO
-ENRICHMENT
-SCORING
-OFFER_MADE
-OFFER_ACCEPTED
-REJECTED
-CANCELLED
-WITHDRAWN
-OFFER_DECLINED
-OFFER_EXPIRED
-```
+1. Все внешние проверки синтетические: нет реальных ЕГРЮЛ, БКИ и антифрода.
+2. Нет ручного рассмотрения заявок.
+3. Нет подписания договора и выдачи денег.
+4. SQLite и demo JWT secret не предназначены для production.
+5. Risk score не является калиброванной вероятностью одобрения.
 
 ## API
 
-Все ответы в envelope:
+Все успешные ответы:
 
 ```json
 {"data": {}}
@@ -185,7 +226,7 @@ GET    /readyz
 
 ## Конфигурация
 
-Один `.env` в корне проекта. Vite читает его через `envDir`.
+Один `.env` в корне. Vite читает его через `envDir`.
 
 ```env
 APP_ENV=development
@@ -203,15 +244,5 @@ VITE_API_URL=http://localhost:8000
 `ML_MODE`:
 
 - `engine` — локальный credit engine, default;
-- `mock` — простой mock для тестов;
-- `http` — будущий внешний ML-сервис через `POST {ML_BASE_URL}/evaluate`.
-
-## Ограничения demo
-
-- синтетические данные;
-- нет реальных адаптеров ЕГРЮЛ, БКИ и антифрода;
-- checks замоканы в `CreditEngineClient`;
-- нет manual review;
-- нет подписания и выдачи;
-- SQLite, не production-конфигурация;
-- JWT secret в примере предназначен только для локального demo.
+- `mock` — mock для тестов;
+- `http` — будущий внешний ML-сервис.
