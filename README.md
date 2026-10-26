@@ -74,6 +74,8 @@ Swagger UI: http://localhost:8000/docs
 | Docker | `Dockerfile`, `docker-compose.yml` | Один контейнер: Python 3.12 + собранный frontend |
 | Lock-файлы | `requirements.lock`, `Alpha-front/package-lock.json` | Точные версии зависимостей |
 | README | этот файл | Запуск, архитектура, конфигурация, сценарий проверки |
+| Обзор для проверяющего | [`docs/reviewer-guide.md`](docs/reviewer-guide.md), [`docs/reviewer-guide.docx`](docs/reviewer-guide.docx) | Сжатый документ для Google Docs |
+| Техническое приложение | [`docs/engine-appendix.md`](docs/engine-appendix.md), [`docs/engine-appendix.docx`](docs/engine-appendix.docx) | Таблицы pipeline, факторов, примеров и ограничений |
 | Синтетические данные | `app/platform/seed.py` | 4 демо-заявки и демо-аккаунт |
 | Сторонние компоненты | [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) | Лицензии и смоделированные интеграции |
 | Архитектура | [`docs/architecture.md`](docs/architecture.md) | Схема компонентов и режимов запуска |
